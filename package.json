@@ -43,6 +43,7 @@
     "android": "expo start --android",
     "ios": "expo start --ios",
     "web": "node --max-old-space-size=4096 node_modules/expo/bin/cli start --web",
+    "build:web": "expo export -p web",
     "verify:tenancy": "node scripts/verify-tenancy.mjs",
     "check:migrations": "node scripts/check-migrations.mjs",
     "walk:lifecycle": "node scripts/walk-order-lifecycle.mjs",
