@@ -1,0 +1,29 @@
+-- =============================================================================
+-- Factory ERP — repair for the dev user seed (0003).
+--
+-- Why: inserting into auth.users without the token columns leaves them NULL.
+-- GoTrue (Supabase Auth) scans those columns into non-nullable Go strings, so a
+-- NULL makes every login fail with:
+--     500 unexpected_failure — "Database error querying schema"
+-- They must be empty strings. This backfills the seeded rows.
+--
+-- Safe to re-run. Only touches rows where a token column is NULL.
+-- =============================================================================
+
+update auth.users set
+  confirmation_token         = coalesce(confirmation_token, ''),
+  recovery_token             = coalesce(recovery_token, ''),
+  email_change_token_new     = coalesce(email_change_token_new, ''),
+  email_change_token_current = coalesce(email_change_token_current, ''),
+  email_change               = coalesce(email_change, ''),
+  phone_change               = coalesce(phone_change, ''),
+  phone_change_token         = coalesce(phone_change_token, ''),
+  reauthentication_token     = coalesce(reauthentication_token, '')
+where confirmation_token is null
+   or recovery_token is null
+   or email_change_token_new is null
+   or email_change_token_current is null
+   or email_change is null
+   or phone_change is null
+   or phone_change_token is null
+   or reauthentication_token is null;

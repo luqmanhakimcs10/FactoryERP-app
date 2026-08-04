@@ -6,6 +6,16 @@
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
+    "plugins": [
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "Allow Factory ERP to capture machine panel photos for shift close."
+        }
+      ],
+      "expo-sharing",
+      "expo-font"
+    ],
     "ios": {
       "supportsTablet": true
     },
