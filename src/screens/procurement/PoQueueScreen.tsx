@@ -20,7 +20,7 @@ import { useQuery } from '@tanstack/react-query';
 import { useNavigation } from '@react-navigation/native';
 import { Screen } from '../../components/ui/Screen';
 import { DashboardHeader } from '../../components/ui/DashboardHeader';
-import { ActionBanner } from '../../components/ui/ActionBanner';
+import { TaskBanners } from '../../components/ui/TaskBanners';
 import { SearchBar } from '../../components/lists/SearchBar';
 import { StatusPill } from '../../components/ui/StatusPill';
 import { listPurchaseOrders } from '../../api/endpoints/inventory';
@@ -98,14 +98,7 @@ export function PoQueueScreen() {
         navigation={navigation}
       />
 
-      {/* Open POs are procurement's standing queue — what is not yet received. */}
-      {filter === 'open' && (data?.length ?? 0) > 0 ? (
-        <ActionBanner
-          title={`${data!.length} purchase order${data!.length === 1 ? '' : 's'} open`}
-          subtitle="Awaiting supplier delivery or goods receipt"
-          style={styles.banner}
-        />
-      ) : null}
+      <View style={styles.banner}><TaskBanners /></View>
 
       <View style={styles.filters}>
         {FILTERS.map((f) => (

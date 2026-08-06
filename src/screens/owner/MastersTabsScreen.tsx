@@ -11,8 +11,7 @@ import { useNavigation } from '@react-navigation/native';
 import { useQuery } from '@tanstack/react-query';
 import { Screen } from '../../components/ui/Screen';
 import { DashboardHeader } from '../../components/ui/DashboardHeader';
-import { ActionBanner } from '../../components/ui/ActionBanner';
-import { getQueueSummary } from '../../api/endpoints/stageHandover';
+import { TaskBanners } from '../../components/ui/TaskBanners';
 import { MasterCard, CardGrid } from '../../components/ui/MasterCard';
 import { matchesSearch } from '../../utils/search';
 import { countEmployees } from '../../api/endpoints/employees';
@@ -75,12 +74,6 @@ export function MastersTabsScreen() {
   const navigation = useNavigation<any>();
   const [search, setSearch] = useState('');
 
-  // The owner has no single queue of their own — they see across every role. So
-  // the banner surfaces the largest thing currently waiting anywhere in the
-  // factory, from the same per-role counts the notification bell already reads.
-  const { data: queues } = useQuery({ queryKey: ['queueSummary', 'owner'], queryFn: getQueueSummary });
-  const top = (queues ?? []).slice().sort((a, b) => b.count - a.count)[0] ?? null;
-
   const { data, isError } = useQuery({
     queryKey: ['masterCardCounts'],
     queryFn: async () => {
@@ -117,13 +110,7 @@ export function MastersTabsScreen() {
         navigation={navigation}
       />
       <ScrollView contentContainerStyle={styles.container}>
-        {top ? (
-          <ActionBanner
-            title={`${top.count} ${top.label.toLowerCase()}`}
-            subtitle="The biggest queue in the factory right now"
-            style={styles.banner}
-          />
-        ) : null}
+        <TaskBanners />
         <CardGrid>
           {visible.map((card) => (
             <MasterCard

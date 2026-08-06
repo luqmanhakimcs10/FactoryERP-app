@@ -11,7 +11,7 @@
 import React, { useState } from 'react';
 import { View, Text, FlatList, Pressable, StyleSheet, ActivityIndicator } from 'react-native';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { useNavigation } from '@react-navigation/native';
+import { useNavigation, useRoute } from '@react-navigation/native';
 import { Screen } from '../../components/ui/Screen';
 import { SegmentedTabs } from '../../components/ui/SegmentedTabs';
 import { StatCard, StatGrid } from '../../components/ui/StatGrid';
@@ -56,9 +56,15 @@ type TabKey = 'overview' | 'job_card' | 'accept_inventory' | 'final_qa';
 
 export function OrdersBoxScreen() {
   const navigation = useNavigation<any>();
+  const route = useRoute<any>();
   const queryClient = useQueryClient();
   const showNextStep = useNextStep();
-  const [activeTab, setActiveTab] = useState<TabKey>('overview');
+  // Accepting material is an INLINE action on the Accept-inventory tab, not a
+  // per-item screen, so the dashboard banner deep-links to the tab. Navigation
+  // only — the tab's own content and behaviour are untouched.
+  const [activeTab, setActiveTab] = useState<TabKey>(
+    (route.params?.tab as TabKey) ?? 'overview'
+  );
   const [startError, setStartError] = useState<string | null>(null);
 
   const { data: totalCount } = useQuery({ queryKey: ['orderCount'], queryFn: countOrders });

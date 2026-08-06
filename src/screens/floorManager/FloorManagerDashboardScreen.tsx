@@ -15,18 +15,14 @@ import { useNavigation } from '@react-navigation/native';
 import { useQuery } from '@tanstack/react-query';
 import { Screen } from '../../components/ui/Screen';
 import { DashboardHeader } from '../../components/ui/DashboardHeader';
-import { ActionBanner } from '../../components/ui/ActionBanner';
+import { TaskBanners } from '../../components/ui/TaskBanners';
 import { MasterCard, CardGrid, type MasterCardProps } from '../../components/ui/MasterCard';
-import { countOrders, listOrders } from '../../api/endpoints/orders';
+import { countOrders } from '../../api/endpoints/orders';
 import { countMasters } from '../../api/endpoints/masters';
 import { listShiftCloseQueue, listFactoryLeaves } from '../../api/endpoints/shifts';
-import { listPendingMaterialAcceptance } from '../../api/endpoints/inventory';
 import { listFactoryDamage } from '../../api/endpoints/orders';
 import { matchesSearch } from '../../utils/search';
-import type { OrderStatus } from '../../models/orderTypes';
 import { colors, spacing, fontSize } from '../../constants/theme';
-
-const JOB_CARD_STATUSES: OrderStatus[] = ['awaiting_job_card', 'job_card_shared'];
 
 export function FloorManagerDashboardScreen() {
   const navigation = useNavigation<any>();
@@ -50,17 +46,6 @@ export function FloorManagerDashboardScreen() {
         damage: damage.length,
       };
     },
-  });
-
-  // Banner data — both already fetched elsewhere on this role's screens, so
-  // this surfaces existing queues rather than introducing new logic.
-  const { data: jobCardQueue } = useQuery({
-    queryKey: ['orders', 'fmJobCard'],
-    queryFn: () => listOrders(JOB_CARD_STATUSES),
-  });
-  const { data: pendingMaterial } = useQuery({
-    queryKey: ['pendingMaterialAcceptance'],
-    queryFn: listPendingMaterialAcceptance,
   });
 
   const cards: (MasterCardProps & { key: string })[] = [
@@ -116,26 +101,6 @@ export function FloorManagerDashboardScreen() {
     [search, data]
   );
 
-  // The most actionable queue wins the banner: material sitting in the store is
-  // blocking production RIGHT NOW, whereas a job card is the floor manager's own
-  // next task. Nothing outstanding -> no banner, rather than a hollow one.
-  const material = pendingMaterial?.length ?? 0;
-  const jobCards = jobCardQueue?.length ?? 0;
-  const banner =
-    material > 0
-      ? {
-          title: `${material} order${material === 1 ? '' : 's'} ready to accept inventory`,
-          subtitle: 'Materials are waiting in the store — accept to start production',
-          onPress: () => navigation.navigate('OrdersBox'),
-        }
-      : jobCards > 0
-        ? {
-            title: `${jobCards} order${jobCards === 1 ? '' : 's'} awaiting a job card`,
-            subtitle: 'Set the stage sequence so production can be planned',
-            onPress: () => navigation.navigate('OrdersBox'),
-          }
-        : null;
-
   return (
     <Screen padded={false}>
       <DashboardHeader
@@ -145,7 +110,7 @@ export function FloorManagerDashboardScreen() {
         navigation={navigation}
       />
       <ScrollView contentContainerStyle={styles.container}>
-        {banner ? <ActionBanner {...banner} style={styles.banner} /> : null}
+        <TaskBanners />
 
         <CardGrid>
           {visible.map(({ key, ...card }) => (

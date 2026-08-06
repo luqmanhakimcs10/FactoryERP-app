@@ -52,7 +52,8 @@
     "verify:repeatqa": "node scripts/verify-repeat-qa-loop.mjs",
     "verify:fix0": "node scripts/verify-fix0-production-guard.mjs",
     "verify:fivefixes": "node scripts/verify-five-fixes.mjs",
-    "verify:escapes": "node scripts/verify-escape-hatches.mjs"
+    "verify:escapes": "node scripts/verify-escape-hatches.mjs",
+    "verify:banners": "node scripts/verify-task-banners.mjs"
   },
   "private": true
 }

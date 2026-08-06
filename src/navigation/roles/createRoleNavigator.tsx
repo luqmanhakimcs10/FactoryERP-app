@@ -10,6 +10,7 @@ import React from 'react';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { AppHeader } from '../../components/ui/AppHeader';
 import { RoleHomeScreen } from '../../screens/shared/RoleHomeScreen';
+import { TaskQueueScreen } from '../../screens/shared/TaskQueueScreen';
 import { MasterListScreen } from '../../screens/masters/MasterListScreen';
 import { MasterFormScreen } from '../../screens/masters/MasterFormScreen';
 import { MyOrdersScreen } from '../../screens/orderTaker/MyOrdersScreen';
@@ -174,7 +175,9 @@ export function createRoleNavigator(role: Role) {
   const canPayroll = role === ROLES.ACCOUNTANT;
   // ---- Phase 7 ----
   const canFinance = role === ROLES.ACCOUNTANT;
-  const canApprove = false;
+  // Was `false`, which left ApprovalsInbox/ApprovalDetail unregistered — so the
+  // owner's "approvals waiting on you" banner had no destination to open.
+  const canApprove = role === ROLES.COMPANY_ADMIN;
   const canReports = false;
   const canFinalQa = role === ROLES.FLOOR_MANAGER;
 
@@ -204,6 +207,15 @@ export function createRoleNavigator(role: Role) {
             // disappeared. That was the missing-search-bar bug.
             headerShown: false,
           }}
+        />
+
+        {/* The filtered list behind a task banner. Registered for every role
+            because every role has banners; which queues it can actually load is
+            enforced in `my_queue_items`, not by hiding the route. */}
+        <Stack.Screen
+          name="TaskQueue"
+          component={TaskQueueScreen}
+          options={{ title: 'Waiting on you' }}
         />
 
         {hasMasters ? (

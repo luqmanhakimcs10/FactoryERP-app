@@ -15,6 +15,7 @@ import { useQuery } from '@tanstack/react-query';
 import { useNavigation } from '@react-navigation/native';
 import { Screen } from '../../components/ui/Screen';
 import { DashboardHeader } from '../../components/ui/DashboardHeader';
+import { TaskBanners } from '../../components/ui/TaskBanners';
 import { StitchLine } from '../../components/ui/StitchLine';
 import { StatusPill } from '../../components/ui/StatusPill';
 import { ListRow } from '../../components/lists/ListRow';
@@ -48,6 +49,7 @@ export function WorkerDashboardScreen() {
   return (
     <Screen padded={false}>
       <DashboardHeader navigation={navigation} />
+      <View style={{ paddingHorizontal: 16, paddingTop: 16 }}><TaskBanners /></View>
       <ScrollView
         contentContainerStyle={styles.content}
         refreshControl={

@@ -12,7 +12,7 @@ import { useNavigation } from '@react-navigation/native';
 import { useQuery } from '@tanstack/react-query';
 import { Screen } from '../../components/ui/Screen';
 import { DashboardHeader } from '../../components/ui/DashboardHeader';
-import { ActionBanner } from '../../components/ui/ActionBanner';
+import { TaskBanners } from '../../components/ui/TaskBanners';
 import { MasterCard, CardGrid } from '../../components/ui/MasterCard';
 import { matchesSearch } from '../../utils/search';
 import { countMasters } from '../../api/endpoints/masters';
@@ -118,19 +118,6 @@ export function AccountantDashboardScreen() {
     [search]
   );
 
-  // Receivables are the accountant's most actionable queue: an unpaid invoice is
-  // money owed to the factory. `countInvoices` already backs the Invoices card,
-  // so this reuses a number the dashboard has rather than fetching a new one.
-  const invoices = data?.invoices ?? 0;
-  const banner =
-    invoices > 0
-      ? {
-          title: `${invoices} invoice${invoices === 1 ? '' : 's'} on the books`,
-          subtitle: 'Receivable and payable — review what is outstanding',
-          onPress: () => navigation.navigate('AcctInvoices'),
-        }
-      : null;
-
   return (
     <Screen padded={false}>
       <DashboardHeader
@@ -140,7 +127,7 @@ export function AccountantDashboardScreen() {
         navigation={navigation}
       />
       <ScrollView contentContainerStyle={styles.container}>
-        {banner ? <ActionBanner {...banner} style={styles.banner} /> : null}
+        <TaskBanners />
         <CardGrid>
           {visible.map((card) => (
             <MasterCard

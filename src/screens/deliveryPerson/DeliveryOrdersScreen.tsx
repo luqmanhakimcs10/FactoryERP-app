@@ -28,7 +28,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Ionicons } from '@expo/vector-icons';
 import { Screen } from '../../components/ui/Screen';
 import { DashboardHeader } from '../../components/ui/DashboardHeader';
-import { ActionBanner } from '../../components/ui/ActionBanner';
+import { TaskBanners } from '../../components/ui/TaskBanners';
 import { AppButton } from '../../components/ui/AppButton';
 import { StatusPill, RepeatStatusPill } from '../../components/ui/StatusPill';
 import { EmptyState, ListSkeleton } from '../../components/ui/States';
@@ -116,16 +116,7 @@ export function DeliveryOrdersScreen({ navigation }: any) {
         <View style={styles.stitch} />
       </View>
 
-      {/* Only raised for work that is actually LATE. A banner that fired for
-          every queued item would be noise on a screen that is nothing but a
-          queue. */}
-      {breached > 0 ? (
-        <ActionBanner
-          title={`${breached} piece${breached === 1 ? '' : 's'} past their SLA`}
-          subtitle="These are overdue at a finishing partner — chase or collect"
-          style={styles.banner}
-        />
-      ) : null}
+      <View style={styles.banner}><TaskBanners /></View>
 
       {isLoading ? (
         <ListSkeleton rows={4} />

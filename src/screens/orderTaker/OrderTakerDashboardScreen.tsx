@@ -15,7 +15,7 @@ import { useNavigation } from '@react-navigation/native';
 import { useQuery } from '@tanstack/react-query';
 import { Screen } from '../../components/ui/Screen';
 import { DashboardHeader } from '../../components/ui/DashboardHeader';
-import { ActionBanner } from '../../components/ui/ActionBanner';
+import { TaskBanners } from '../../components/ui/TaskBanners';
 import { MasterCard, CardGrid, type MasterCardProps } from '../../components/ui/MasterCard';
 import { matchesSearch } from '../../utils/search';
 import { countOrders, listReturnRepeats } from '../../api/endpoints/orders';
@@ -58,17 +58,6 @@ export function OrderTakerDashboardScreen() {
     [search, orders.data, activeCount]
   );
 
-  // Active returns are the only thing this role is ever asked to ACT on — every
-  // other status on their board is read-only by design.
-  const banner =
-    activeCount && activeCount > 0
-      ? {
-          title: `${activeCount} return${activeCount === 1 ? '' : 's'} to complete`,
-          subtitle: 'Confirm the piece has physically gone back to the vendor',
-          onPress: () => navigation.navigate('Returns'),
-        }
-      : null;
-
   return (
     <Screen padded={false}>
       <DashboardHeader
@@ -87,7 +76,7 @@ export function OrderTakerDashboardScreen() {
           <Text style={styles.newBtnText}>+ New Order</Text>
         </Pressable>
 
-        {banner ? <ActionBanner {...banner} style={styles.banner} /> : null}
+        <TaskBanners />
 
         <CardGrid>
           {visible.map(({ key, ...card }) => (

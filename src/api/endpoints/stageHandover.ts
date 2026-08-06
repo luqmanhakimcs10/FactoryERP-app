@@ -248,6 +248,35 @@ export interface QueueSummaryRow {
   queue_key: string;
   label: string;
   count: number;
+  /** Plain-language banner headline, e.g. "3 orders need a job card". */
+  banner_title: string;
+  banner_subtitle: string;
+  /**
+   * True only when the queue is this role's OWN job. company_admin counts every
+   * role's queue for the bell (oversight), but only their approvals are theirs
+   * to act on — banners render `own_task` rows so the owner is not buried under
+   * nine act-now banners. See 0065.
+   */
+  own_task: boolean;
+}
+
+/** One row behind a banner. Shape is identical for every queue (0066). */
+export interface QueueItem {
+  item_id: string;
+  code: string | null;
+  title: string | null;
+  subtitle: string | null;
+  order_id: string | null;
+  order_code: string | null;
+  secondary_id: string | null;
+  status: string | null;
+}
+
+/** The pending rows behind one banner — same predicate as its count. */
+export async function getQueueItems(queueKey: string): Promise<QueueItem[]> {
+  const { data, error } = await supabase.rpc('my_queue_items', { p_queue_key: queueKey });
+  if (error) throw error;
+  return (data ?? []) as QueueItem[];
 }
 
 /**

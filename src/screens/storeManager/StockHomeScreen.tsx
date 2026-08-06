@@ -21,7 +21,7 @@ import { SearchBar } from '../../components/lists/SearchBar';
 import { ListRow } from '../../components/lists/ListRow';
 import { MasterCard } from '../../components/ui/MasterCard';
 import { DashboardHeader } from '../../components/ui/DashboardHeader';
-import { ActionBanner } from '../../components/ui/ActionBanner';
+import { TaskBanners } from '../../components/ui/TaskBanners';
 import { StatCard, StatGrid } from '../../components/ui/StatGrid';
 import {
   listThreadStock,
@@ -79,14 +79,7 @@ export function StockHomeScreen() {
         }
         ListHeaderComponent={
           <View>
-            {issueQueue && issueQueue.length > 0 ? (
-              <ActionBanner
-                title={`${issueQueue.length} job card${issueQueue.length === 1 ? '' : 's'} waiting on material`}
-                subtitle="The floor cannot start production until these are issued"
-                onPress={() => navigation.navigate('MaterialIssueQueue')}
-                style={styles.banner}
-              />
-            ) : null}
+            <View style={styles.banner}><TaskBanners /></View>
 
             <View style={styles.poBox}>
               {/* layout="row" deliberately: this is a single card, not a menu

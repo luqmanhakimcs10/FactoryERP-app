@@ -7,6 +7,7 @@ import { View, Text, StyleSheet, ScrollView } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
 import { Screen } from '../../components/ui/Screen';
 import { DashboardHeader } from '../../components/ui/DashboardHeader';
+import { TaskBanners } from '../../components/ui/TaskBanners';
 import { StitchLine } from '../../components/ui/StitchLine';
 import { ListRow } from '../../components/lists/ListRow';
 import { useAuth } from '../../auth/AuthContext';
@@ -34,6 +35,7 @@ export function RoleHomeScreen() {
   return (
     <Screen padded={false}>
       <DashboardHeader navigation={navigation} />
+      <View style={{ paddingHorizontal: 16, paddingTop: 16 }}><TaskBanners /></View>
       <ScrollView contentContainerStyle={styles.content}>
         <View style={styles.header}>
           <Text style={styles.title}>{ROLE_HOME_TITLE[role]}</Text>

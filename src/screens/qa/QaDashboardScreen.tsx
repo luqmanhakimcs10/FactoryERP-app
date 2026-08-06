@@ -13,7 +13,7 @@ import { useNavigation } from '@react-navigation/native';
 import { useQuery } from '@tanstack/react-query';
 import { Screen } from '../../components/ui/Screen';
 import { DashboardHeader } from '../../components/ui/DashboardHeader';
-import { ActionBanner } from '../../components/ui/ActionBanner';
+import { TaskBanners } from '../../components/ui/TaskBanners';
 import { MasterCard, CardGrid, type MasterCardProps } from '../../components/ui/MasterCard';
 import { listOrders } from '../../api/endpoints/orders';
 import { listQaFinalQueue } from '../../api/endpoints/stageHandover';
@@ -78,25 +78,6 @@ export function QaDashboardScreen() {
     [search, data, inProduction, finalQueue]
   );
 
-  // Inspection is the more urgent queue: an uninspected order blocks everything
-  // downstream, whereas a final pass only holds up invoicing.
-  const waiting = data?.length ?? 0;
-  const finals = finalQueue?.length ?? 0;
-  const banner =
-    waiting > 0
-      ? {
-          title: `${waiting} order${waiting === 1 ? '' : 's'} awaiting inspection`,
-          subtitle: 'Cloth inspection or repeat coding has not started',
-          onPress: () => navigation.navigate('InspectionQueue'),
-        }
-      : finals > 0
-        ? {
-            title: `${finals} piece${finals === 1 ? '' : 's'} waiting on your final pass`,
-            subtitle: 'Cleared by the Floor Manager — these complete the order',
-            onPress: () => navigation.navigate('FinalPassQueue'),
-          }
-        : null;
-
   return (
     <Screen padded={false}>
       <DashboardHeader
@@ -106,7 +87,7 @@ export function QaDashboardScreen() {
         navigation={navigation}
       />
       <ScrollView contentContainerStyle={styles.container}>
-        {banner ? <ActionBanner {...banner} style={styles.banner} /> : null}
+        <TaskBanners />
         <CardGrid>
           {visible.map(({ key, ...card }) => (
             <MasterCard key={key} {...card} />

@@ -24,7 +24,7 @@ import { useNavigation } from '@react-navigation/native';
 import { useAuth } from '../../auth/AuthContext';
 import { Screen } from '../../components/ui/Screen';
 import { DashboardHeader } from '../../components/ui/DashboardHeader';
-import { ActionBanner } from '../../components/ui/ActionBanner';
+import { TaskBanners } from '../../components/ui/TaskBanners';
 import { StitchLine } from '../../components/ui/StitchLine';
 import {
   getPartnerEarningsSummary,
@@ -119,16 +119,7 @@ export function PartnerDashboardScreen() {
           <StitchLine />
         </View>
 
-        {/* Work physically in this partner's hands — the only thing on this
-            dashboard they can act on. Same query the Active work tab reads. */}
-        {activeWork.data && activeWork.data.length > 0 ? (
-          <ActionBanner
-            title={`${activeWork.data.length} piece${activeWork.data.length === 1 ? '' : 's'} with you now`}
-            subtitle="Mark each one finished when your work on it is done"
-            onPress={() => setTab('active')}
-            style={{ marginBottom: spacing.lg }}
-          />
-        ) : null}
+        <TaskBanners />
 
         <View style={styles.periods}>
           {PERIODS.map((p) => (
