@@ -44,3 +44,6 @@ yarn-error.*
 
 # Screenshots from scripts/theme-shots.mjs
 .theme-shots/
+
+# Screenshots from scripts/banner-shots.mjs
+.banner-shots/

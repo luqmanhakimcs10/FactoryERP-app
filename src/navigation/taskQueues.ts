@@ -23,6 +23,8 @@ export const QUEUE_SCREEN_TITLE: Record<string, string> = {
   fm_collect: 'Waiting to be collected',
   fm_handover: 'Ready to hand over',
   fm_final_qa: 'Need final QA',
+  fm_shift_close: 'Shifts still open',
+  fm_leave: 'Leave requests',
   material_requests: 'Material requests',
   grn_pending: 'Deliveries to confirm',
   qa_inspection: 'Need inspection',
@@ -32,12 +34,15 @@ export const QUEUE_SCREEN_TITLE: Record<string, string> = {
   dp_send: 'Ready to send out',
   dp_pickup: 'Finished at the partner',
   dp_handback: 'To hand back',
+  dp_final_delivery: 'Ready for final delivery',
   partner_active: 'With you now',
   ot_returns: 'Returns to complete',
   acct_receivables: 'Unpaid invoices',
   acct_payables: 'Bills to pay',
   owner_approvals: 'Approvals',
   po_draft: 'Purchase orders to raise',
+  po_bill: 'Need a supplier bill',
+  po_handover: 'To hand over',
 };
 
 /**
@@ -75,6 +80,16 @@ export function routeForItem(queueKey: string, item: QueueItem): QueueRoute | nu
         params: { orderId: item.order_id, orderCode: item.order_code },
       };
 
+    case 'fm_shift_close':
+      // secondary_id is the shift — the same param ShiftCloseQueue's own rows
+      // pass, so this lands on the identical screen, not a copy of it.
+      return { screen: 'ShiftClose', params: { shiftId: item.secondary_id } };
+
+    case 'fm_leave':
+      // Approve/reject are buttons on the Leave box's rows, not a per-request
+      // screen, so the banner opens that box directly (see routeForBanner).
+      return null;
+
     // ---- Store Manager ----
     case 'material_requests':
       return {
@@ -104,6 +119,9 @@ export function routeForItem(queueKey: string, item: QueueItem): QueueRoute | nu
     case 'dp_send':
     case 'dp_pickup':
     case 'dp_handback':
+    // "Ready for final delivery" is a section at the foot of that same list,
+    // with the deliver action on each row.
+    case 'dp_final_delivery':
       return null;
 
     // ---- Finishing Partner ----
@@ -125,7 +143,11 @@ export function routeForItem(queueKey: string, item: QueueItem): QueueRoute | nu
       return { screen: 'ApprovalDetail', params: { kind: 'expense', id: item.secondary_id } };
 
     // ---- Procurement ----
+    // All three open the same PO screen; which button is waiting there is what
+    // differs, and the PO's own status already decides that.
     case 'po_draft':
+    case 'po_bill':
+    case 'po_handover':
       return { screen: 'PoDetail', params: { poId: item.secondary_id } };
 
     default:
@@ -144,11 +166,14 @@ export function routeForBanner(queueKey: string): QueueRoute {
     case 'dp_send':
     case 'dp_pickup':
     case 'dp_handback':
+    case 'dp_final_delivery':
       return { screen: 'RoleHome' };
     case 'partner_active':
       return { screen: 'RoleHome' };
     case 'accept_inventory':
       return { screen: 'OrdersBox', params: { tab: 'accept_inventory' } };
+    case 'fm_leave':
+      return { screen: 'LeaveBox' };
     default:
       return { screen: 'TaskQueue', params: { queueKey } };
   }

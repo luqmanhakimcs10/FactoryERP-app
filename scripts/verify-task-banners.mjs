@@ -52,6 +52,8 @@ const ROUTES = {
   fm_collect:        (i) => ['StageTracking', i.order_id],
   fm_handover:       (i) => ['StageTracking', i.order_id],
   fm_final_qa:       (i) => ['FinalQaDetail', i.order_id],
+  fm_shift_close:    (i) => ['ShiftClose', i.secondary_id],
+  fm_leave:          () => ['LeaveBox', 'n/a'],
   material_requests: (i) => ['IssueDetail', i.secondary_id],
   grn_pending:       (i) => ['GrnDetail', i.secondary_id],
   qa_inspection:     (i) => (i.status === 'awaiting_cloth_inspection' ? ['ClothInspection', i.order_id] : ['OrderQa', i.order_id]),
@@ -61,12 +63,15 @@ const ROUTES = {
   dp_send:           () => ['(inline)', 'n/a'],
   dp_pickup:         () => ['(inline)', 'n/a'],
   dp_handback:       () => ['(inline)', 'n/a'],
+  dp_final_delivery: () => ['(inline)', 'n/a'],
   partner_active:    () => ['(inline)', 'n/a'],
   ot_returns:        () => ['Returns', 'n/a'],
   acct_receivables:  (i) => ['InvoiceDetail', i.secondary_id],
   acct_payables:     () => ['Expenses', 'n/a'],
   owner_approvals:   (i) => ['ApprovalDetail', i.secondary_id],
   po_draft:          (i) => ['PoDetail', i.secondary_id],
+  po_bill:           (i) => ['PoDetail', i.secondary_id],
+  po_handover:       (i) => ['PoDetail', i.secondary_id],
 };
 
 const ROLES = [
@@ -160,29 +165,62 @@ console.log('\n=== 3. A queue key is not a capability ===');
 // ---------------------------------------------------------------------------
 console.log('\n=== 4. Counts agree with the screens they point at ===');
 {
-  const fm = tokens['floor@alpha.test'];
-  const s = (await rpc('my_queue_summary', fm, {})).body ?? [];
-  const jc = s.find((r) => r.queue_key === 'awaiting_job_card');
-  if (jc) {
-    // The Orders box's own "Awaiting job card" tab uses exactly this filter.
-    const direct = await fetch(
-      `${URL_}/rest/v1/orders?select=id&status=in.(awaiting_job_card,job_card_shared)`,
-      { headers: { apikey: KEY, Authorization: `Bearer ${fm}` } });
-    const rows = await direct.json();
-    chk(rows.length === Number(jc.count),
-      `banner (${jc.count}) matches the Orders box tab's own query (${rows.length})`);
-  }
+  /**
+   * `if (banner)` was how the missing job-card banner survived the last pass:
+   * when the banner was absent entirely, the check silently did not run and the
+   * suite still went green. A queue whose SCREEN shows a non-zero count MUST
+   * have a banner, so absence is now the failure, not a reason to skip.
+   */
+  const agrees = async (label, email, key, query) => {
+    const tok = tokens[email];
+    const rows = await (await fetch(`${URL_}/rest/v1/${query}`,
+      { headers: { apikey: KEY, Authorization: `Bearer ${tok}` } })).json();
+    const s = (await rpc('my_queue_summary', tok, {})).body ?? [];
+    const banner = s.find((r) => r.queue_key === key && r.own_task);
 
-  const qa = tokens['qa@alpha.test'];
-  const qs = (await rpc('my_queue_summary', qa, {})).body ?? [];
-  const insp = qs.find((r) => r.queue_key === 'qa_inspection');
-  if (insp) {
-    const direct = await fetch(
-      `${URL_}/rest/v1/orders?select=id&status=in.(awaiting_cloth_inspection,awaiting_coding)`,
-      { headers: { apikey: KEY, Authorization: `Bearer ${qa}` } });
-    const rows = await direct.json();
-    chk(rows.length === Number(insp.count),
-      `QA banner (${insp.count}) matches the inspection queue's own query (${rows.length})`);
+    if (rows.length === 0) {
+      chk(!banner, `${label}: screen shows 0 -> no banner (correct)`);
+      return;
+    }
+    if (!banner) {
+      no(`${label}: screen shows ${rows.length} but there is NO banner for "${key}"`);
+      return;
+    }
+    chk(rows.length === Number(banner.count),
+      `${label}: banner (${banner.count}) matches the screen's own query (${rows.length})`);
+  };
+
+  // The Orders box's own tabs use exactly these filters.
+  await agrees('FM "Awaiting job card"', 'floor@alpha.test', 'awaiting_job_card',
+    'orders?select=id&status=in.(awaiting_job_card,job_card_shared)');
+  await agrees('FM "Leave"', 'floor@alpha.test', 'fm_leave',
+    'leaves?select=id&status=eq.pending');
+  await agrees('QA "Awaiting inspection"', 'qa@alpha.test', 'qa_inspection',
+    'orders?select=id&status=in.(awaiting_cloth_inspection,awaiting_coding)');
+  await agrees('Store "PO"', 'store@alpha.test', 'grn_pending',
+    'grns?select=id&status=eq.pending');
+  await agrees('Procurement "To action" (executed)', 'procurement@alpha.test', 'po_bill',
+    'purchase_orders?select=id&status=eq.executed');
+  await agrees('Owner approvals', 'owner@alpha.test', 'owner_approvals',
+    'expenses?select=id&status=eq.pending');
+}
+
+// ---------------------------------------------------------------------------
+console.log('\n=== 5. Queues sourced from an RPC the screen calls ===');
+{
+  // These two are counted by inlining the predicate of a SECURITY DEFINER
+  // function that asserts a module. If the inlined copy ever drifts from the
+  // function, the banner and the screen disagree — so compare them directly.
+  const dp = tokens['delivery@alpha.test'];
+  const direct = await rpc('dp_final_delivery_queue', dp, {});
+  const s = (await rpc('my_queue_summary', dp, {})).body ?? [];
+  const banner = s.find((r) => r.queue_key === 'dp_final_delivery');
+  const listed = (direct.body ?? []).length;
+  if (listed === 0) {
+    chk(!banner, 'Delivery "Ready for final delivery": 0 -> no banner (correct)');
+  } else {
+    chk(!!banner && Number(banner.count) === listed,
+      `Delivery "Ready for final delivery": banner (${banner?.count ?? 'MISSING'}) matches dp_final_delivery_queue() (${listed})`);
   }
 }
 

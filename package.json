@@ -53,7 +53,9 @@
     "verify:fix0": "node scripts/verify-fix0-production-guard.mjs",
     "verify:fivefixes": "node scripts/verify-five-fixes.mjs",
     "verify:escapes": "node scripts/verify-escape-hatches.mjs",
-    "verify:banners": "node scripts/verify-task-banners.mjs"
+    "verify:banners": "node scripts/verify-task-banners.mjs",
+    "audit:banners": "node scripts/audit-banner-coverage.mjs",
+    "shots:banners": "node scripts/banner-shots.mjs"
   },
   "private": true
 }
