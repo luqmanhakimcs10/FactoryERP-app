@@ -15,7 +15,7 @@
  * reading a stock ledger all open the screens that already do those jobs.
  */
 import React, { useMemo, useState } from 'react';
-import { View, Text, FlatList, StyleSheet, Pressable, RefreshControl } from 'react-native';
+import { View, Text, ScrollView, StyleSheet, Pressable, RefreshControl } from 'react-native';
 import { useQuery } from '@tanstack/react-query';
 import { useNavigation } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
@@ -137,14 +137,26 @@ export function StoreManagerHomeScreen() {
         navigation={navigation}
       />
 
-      <FlatList
-        data={data}
-        keyExtractor={(item) => item.id}
-        // react-native-web's windowing never advanced past the first batch on
-        // these lists, so long inventories silently stopped at ten rows.
-        initialNumToRender={30}
-        windowSize={21}
-        removeClippedSubviews={false}
+      {/*
+        A ScrollView with a flex-wrapped grid, NOT a FlatList with numColumns.
+        Two reasons, in order of importance:
+
+        1. It is the same mechanism `CardGrid` uses for every other dashboard's
+           grid, and this screen is meant to match them. One way to lay out a
+           grid in this app, not two.
+        2. FlatList's numColumns is genuinely hostile here. It throws
+           "Changing numColumns on the fly is not supported" if the value ever
+           differs between renders, and it internally drops to one column to
+           render ListEmptyComponent — so an empty tab trips the invariant and
+           takes the whole screen down with it. That is exactly what happened:
+           the dashboard went blank on the first tab with no rows.
+
+        These lists are tens of items and were already rendering in full
+        (removeClippedSubviews was off, initialNumToRender covered them), so no
+        virtualisation is being given up.
+      */}
+      <ScrollView
+        contentContainerStyle={styles.scroll}
         refreshControl={
           <RefreshControl
             refreshing={!!active.isRefetching}
@@ -152,99 +164,99 @@ export function StoreManagerHomeScreen() {
             tintColor={colors.primary}
           />
         }
-        ListHeaderComponent={
-          <View>
-            <View style={styles.banners}>
-              <TaskBanners />
-            </View>
+      >
+        <View style={styles.banners}>
+          <TaskBanners />
+        </View>
 
-            <View style={styles.tabs}>
-              <SegmentedTabs tabs={tabs} value={tab} onChange={setTab} />
-            </View>
+        {/* Tab bar and the New-PO action stay FULL WIDTH above the grid. */}
+        <View style={styles.tabs}>
+          <SegmentedTabs tabs={tabs} value={tab} onChange={setTab} />
+        </View>
 
-            {tab === 'po' ? (
-              <View style={styles.headerBlock}>
-                <AppButton
-                  title="New purchase order"
-                  icon="add-circle-outline"
-                  onPress={() => navigation.navigate('StoreNewPo')}
-                />
-              </View>
-            ) : null}
-
-            {tab === 'inventory' ? (
-              <View style={styles.headerBlock}>
-                <AppButton
-                  title="Add stock"
-                  icon="add-circle-outline"
-                  onPress={() => navigation.navigate('AddInventory')}
-                />
-              </View>
-            ) : null}
-
-            {tab === 'audit' ? (
-              <View style={styles.headerBlock}>
-                {/* The brief's "mandatory" is a visible nudge, not a lock on the
-                    other three tabs — see 0072's header for why. */}
-                {auditToday.data?.done ? (
-                  <ActionBanner
-                    tone="neutral"
-                    title="Today's audit is done"
-                    subtitle={`${auditToday.data.item_count ?? 0} items counted — ${
-                      auditToday.data.audit_code ?? ''
-                    }`}
-                  />
-                ) : (
-                  <ActionBanner
-                    title="Today's audit has not been done"
-                    subtitle="Count every item once a day — tap to start"
-                    onPress={() => navigation.navigate('DailyAudit')}
-                  />
-                )}
-                <Text style={styles.sectionTitle}>Past audits</Text>
-              </View>
-            ) : null}
-
-            {tab === 'requests' && (issueQueue.data?.length ?? 0) > 0 ? (
-              <View style={styles.headerBlock}>
-                <ActionBanner
-                  title={`${issueQueue.data!.length} request${
-                    issueQueue.data!.length === 1 ? '' : 's'
-                  } to issue`}
-                  subtitle="The floor cannot start production until these go out"
-                  onPress={() => navigation.navigate('MaterialIssueQueue')}
-                />
-              </View>
-            ) : null}
-
-            {active.isLoading ? <Loading /> : null}
-            {active.isError ? (
-              <Text style={styles.error}>{describeDbError(active.error, 'Store')}</Text>
-            ) : null}
+        {tab === 'po' ? (
+          <View style={styles.headerBlock}>
+            <AppButton
+              title="New purchase order"
+              icon="add-circle-outline"
+              onPress={() => navigation.navigate('StoreNewPo')}
+            />
           </View>
-        }
-        ListEmptyComponent={
-          !active.isLoading ? (
-            <View style={styles.empty}>
-              <EmptyState
-                icon="file-tray-outline"
-                title={search ? 'Nothing matches' : EMPTY_TITLE[tab]}
-                message={search ? 'Try a different search.' : EMPTY_BODY[tab]}
+        ) : null}
+
+        {tab === 'inventory' ? (
+          <View style={styles.headerBlock}>
+            <AppButton
+              title="Add stock"
+              icon="add-circle-outline"
+              onPress={() => navigation.navigate('AddInventory')}
+            />
+          </View>
+        ) : null}
+
+        {tab === 'audit' ? (
+          <View style={styles.headerBlock}>
+            {/* The brief's "mandatory" is a visible nudge, not a lock on the
+                other three tabs — see 0072's header for why. */}
+            {auditToday.data?.done ? (
+              <ActionBanner
+                tone="neutral"
+                title="Today's audit is done"
+                subtitle={`${auditToday.data.item_count ?? 0} items counted — ${
+                  auditToday.data.audit_code ?? ''
+                }`}
               />
-            </View>
-          ) : null
-        }
-        renderItem={({ item }) => {
-          // `data` is the union of the four row shapes; the active tab is what
-          // decides which one this is, so each branch narrows it explicitly.
-          if (tab === 'po') return <PoRow row={item as SmPoRow} navigation={navigation} />;
-          if (tab === 'inventory')
-            return <InventoryRow row={item as InventoryItem} navigation={navigation} />;
-          if (tab === 'audit')
-            return <AuditRow row={item as AuditHistoryRow} navigation={navigation} />;
-          return <RequestRow row={item as MaterialRequestRow} navigation={navigation} />;
-        }}
-      />
+            ) : (
+              <ActionBanner
+                title="Today's audit has not been done"
+                subtitle="Count every item once a day — tap to start"
+                onPress={() => navigation.navigate('DailyAudit')}
+              />
+            )}
+            <Text style={styles.sectionTitle}>Past audits</Text>
+          </View>
+        ) : null}
+
+        {tab === 'requests' && (issueQueue.data?.length ?? 0) > 0 ? (
+          <View style={styles.headerBlock}>
+            <ActionBanner
+              title={`${issueQueue.data!.length} request${
+                issueQueue.data!.length === 1 ? '' : 's'
+              } to issue`}
+              subtitle="The floor cannot start production until these go out"
+              onPress={() => navigation.navigate('MaterialIssueQueue')}
+            />
+          </View>
+        ) : null}
+
+        {active.isLoading ? <Loading /> : null}
+        {active.isError ? (
+          <Text style={styles.error}>{describeDbError(active.error, 'Store')}</Text>
+        ) : null}
+
+        {!active.isLoading && data.length === 0 ? (
+          <View style={styles.empty}>
+            <EmptyState
+              icon="file-tray-outline"
+              title={search ? 'Nothing matches' : EMPTY_TITLE[tab]}
+              message={search ? 'Try a different search.' : EMPTY_BODY[tab]}
+            />
+          </View>
+        ) : null}
+
+        <View style={styles.grid}>
+          {data.map((item) => {
+            // `data` is the union of the four shapes; the active tab is what
+            // decides which one this is, so each branch narrows it explicitly.
+            if (tab === 'po') return <PoCard key={item.id} row={item as SmPoRow} navigation={navigation} />;
+            if (tab === 'inventory')
+              return <InventoryCard key={item.id} row={item as InventoryItem} navigation={navigation} />;
+            if (tab === 'audit')
+              return <AuditCard key={item.id} row={item as AuditHistoryRow} navigation={navigation} />;
+            return <RequestCard key={item.id} row={item as MaterialRequestRow} navigation={navigation} />;
+          })}
+        </View>
+      </ScrollView>
     </Screen>
   );
 }
@@ -264,106 +276,179 @@ const EMPTY_BODY: Record<TabKey, string> = {
 };
 
 // ---------------------------------------------------------------------------
-// Rows
+// Cards
+//
+// Two per row, matching the shape of the navigation grid on every other
+// dashboard: tinted icon well and a status pill on the top line, then the
+// identifier, then context. `RecordCard` owns that shell so the four tabs cannot
+// drift apart, and it lives HERE rather than beside MasterCard because the grid
+// for record lists is a Store-Manager-only exception.
+//
+// At half width the constraint is real: every text node is capped with
+// numberOfLines so a long supplier name truncates instead of pushing the card
+// taller than its neighbour and breaking the row's alignment.
 // ---------------------------------------------------------------------------
 
-function PoRow({ row, navigation }: { row: SmPoRow; navigation: any }) {
-  return (
-    <Pressable
-      onPress={() => navigation.navigate('PoDetail', { poId: row.id })}
-      style={({ pressed }) => [styles.row, pressed && styles.rowPressed]}
-      accessibilityRole="button"
-    >
-      <View style={{ flex: 1, gap: 2 }}>
-        <View style={styles.rowTop}>
-          <Text style={styles.code}>{row.po_code}</Text>
-          {/* The brief asks for origin to be visible: the two kinds of PO behave
-              differently and the store manager needs to know which they have. */}
-          <StatusPill
-            label={row.origin === 'auto_shortfall' ? 'Automatic' : 'Manual'}
-            color={row.origin === 'auto_shortfall' ? colors.primary : colors.accent}
-          />
-        </View>
-        <Text style={styles.sub}>
-          {row.supplier_name ?? 'No supplier yet'}
-          {row.order_code ? ` · ${row.order_code}` : ''}
-          {` · ${row.line_count} line${row.line_count === 1 ? '' : 's'}`}
-        </Text>
-        <Text style={styles.hint}>
-          {PO_STATUS_LABEL[row.status] ?? row.status}
-          {row.assigned_to ? ` · ${row.assigned_to}` : ''}
-        </Text>
-      </View>
-      <Ionicons name="chevron-forward" size={18} color={colors.slate} />
-    </Pressable>
-  );
+interface RecordCardProps {
+  icon: keyof typeof Ionicons.glyphMap;
+  /** Coral reads as "needs attention", teal as routine — same rule as MasterCard. */
+  tone?: 'neutral' | 'attention';
+  /** Top-right pill: the one status that matters most at a glance. */
+  pill?: { label: string; color: string };
+  /** The identifier. Always mono, always the most prominent thing on the card. */
+  code: string;
+  lines: (string | null | undefined)[];
+  /** Optional figure shown large at the foot — a quantity, a total. */
+  metric?: { text: string; alert?: boolean };
+  /** Second pill at the foot, for a lifecycle state distinct from `pill`. */
+  footPill?: { label: string; color: string };
+  onPress?: () => void;
 }
 
-function InventoryRow({ row, navigation }: { row: InventoryItem; navigation: any }) {
-  const low = row.reorder_threshold != null && Number(row.quantity) < Number(row.reorder_threshold);
-  return (
-    <Pressable
-      onPress={() => navigation.navigate('StockLedger', { colorCode: row.color_code })}
-      style={({ pressed }) => [styles.row, pressed && styles.rowPressed]}
-      accessibilityRole="button"
-    >
-      <Ionicons name={TYPE_ICON[row.item_type]} size={20} color={colors.primary} />
-      <View style={{ flex: 1, gap: 2 }}>
-        <View style={styles.rowTop}>
-          <Text style={styles.code}>{row.color_code}</Text>
-          {/* How this stock got here — the brief's PO vs Manual badge. */}
-          <StatusPill
-            label={row.source === 'po' ? 'PO' : 'Manual'}
-            color={row.source === 'po' ? colors.primary : colors.slate}
-          />
-        </View>
-        <Text style={styles.sub}>
-          {ITEM_TYPE_LABEL[row.item_type]}
-          {row.size_mm ? ` · ${row.size_mm} mm` : ''}
-          {row.sequin_type ? ` · ${row.sequin_type}` : ''}
-          {row.color_name ? ` · ${row.color_name}` : ''}
-        </Text>
-      </View>
-      <Text style={[styles.qty, (low || Number(row.quantity) <= 0) && { color: colors.alert }]}>
-        {Number(row.quantity).toLocaleString()} {row.unit}
-      </Text>
-    </Pressable>
-  );
-}
+function RecordCard({
+  icon, tone = 'neutral', pill, code, lines, metric, footPill, onPress,
+}: RecordCardProps) {
+  const wellBg = tone === 'attention' ? colors.tintCoral : colors.tintTeal;
+  const wellInk = tone === 'attention' ? colors.accent : colors.primary;
+  const body = lines.filter(Boolean) as string[];
 
-function AuditRow({ row, navigation }: { row: AuditHistoryRow; navigation: any }) {
-  const date = new Date(row.audit_date + 'T00:00:00');
   return (
     <Pressable
-      onPress={() => navigation.navigate('AuditDetail', { auditId: row.id, code: row.audit_code })}
-      style={({ pressed }) => [styles.row, pressed && styles.rowPressed]}
-      accessibilityRole="button"
+      onPress={onPress}
+      disabled={!onPress}
+      accessibilityRole={onPress ? 'button' : undefined}
+      accessibilityLabel={[code, ...body, pill?.label, footPill?.label, metric?.text]
+        .filter(Boolean)
+        .join('. ')}
+      style={({ pressed }) => [styles.card, pressed && onPress && styles.cardPressed]}
     >
-      <View style={{ flex: 1, gap: 2 }}>
-        <Text style={styles.code}>
-          Audit of {date.toLocaleDateString(undefined, { day: 'numeric', month: 'long' })}
-        </Text>
-        <Text style={styles.sub}>
-          {row.item_count} item{row.item_count === 1 ? '' : 's'} counted
-          {row.corrected > 0 ? ` · ${row.corrected} corrected` : ' · all correct'}
-          {row.conducted_by ? ` · ${row.conducted_by}` : ''}
-        </Text>
+      <View style={styles.cardTop}>
+        <View style={[styles.iconWell, { backgroundColor: wellBg }]}>
+          <Ionicons name={icon} size={18} color={wellInk} />
+        </View>
+        {pill ? <StatusPill label={pill.label} color={pill.color} /> : null}
       </View>
-      {row.audit_type === 'weekly' ? (
-        <StatusPill label="Weekly" color={colors.slate} />
+
+      <View style={styles.cardBody}>
+        <Text style={styles.code} numberOfLines={1} ellipsizeMode="tail">
+          {code}
+        </Text>
+        {body.map((l, i) => (
+          <Text key={i} style={styles.sub} numberOfLines={2} ellipsizeMode="tail">
+            {l}
+          </Text>
+        ))}
+      </View>
+
+      {metric || footPill ? (
+        <View style={styles.cardFoot}>
+          {footPill ? <StatusPill label={footPill.label} color={footPill.color} /> : null}
+          {metric ? (
+            <Text
+              style={[styles.qty, metric.alert && { color: colors.alert }]}
+              numberOfLines={1}
+            >
+              {metric.text}
+            </Text>
+          ) : null}
+        </View>
       ) : null}
-      <Ionicons name="chevron-forward" size={18} color={colors.slate} />
     </Pressable>
   );
 }
 
-function RequestRow({ row, navigation }: { row: MaterialRequestRow; navigation: any }) {
+function PoCard({ row, navigation }: { row: SmPoRow; navigation: any }) {
+  const auto = row.origin === 'auto_shortfall';
+  return (
+    <RecordCard
+      icon="document-text-outline"
+      // A PO nobody has raised yet is the one that needs attention.
+      tone={row.status === 'draft' || row.status === 'auto_generated' ? 'attention' : 'neutral'}
+      // Origin first: the two kinds behave differently and that is the thing to
+      // know at a glance. The lifecycle state gets the foot pill.
+      pill={{ label: auto ? 'Auto' : 'Manual', color: auto ? colors.primary : colors.accent }}
+      code={row.po_code}
+      lines={[
+        row.supplier_name ?? 'No supplier yet',
+        [row.order_code, `${row.line_count} line${row.line_count === 1 ? '' : 's'}`,
+         row.assigned_to].filter(Boolean).join(' · '),
+      ]}
+      footPill={{ label: PO_STATUS_LABEL[row.status] ?? row.status, color: colors.slate }}
+      onPress={() => navigation.navigate('PoDetail', { poId: row.id })}
+    />
+  );
+}
+
+function InventoryCard({ row, navigation }: { row: InventoryItem; navigation: any }) {
+  const low = row.reorder_threshold != null && Number(row.quantity) < Number(row.reorder_threshold);
+  const out = Number(row.quantity) <= 0;
+  return (
+    <RecordCard
+      icon={TYPE_ICON[row.item_type]}
+      tone={low || out ? 'attention' : 'neutral'}
+      pill={{
+        label: row.source === 'po' ? 'PO' : 'Manual',
+        color: row.source === 'po' ? colors.primary : colors.slate,
+      }}
+      code={row.color_code}
+      lines={[
+        [ITEM_TYPE_LABEL[row.item_type],
+         row.size_mm ? `${row.size_mm} mm` : null,
+         row.sequin_type].filter(Boolean).join(' · '),
+        row.color_name,
+      ]}
+      metric={{
+        text: `${Number(row.quantity).toLocaleString()} ${row.unit}`,
+        alert: low || out,
+      }}
+      onPress={() => navigation.navigate('StockLedger', { colorCode: row.color_code })}
+    />
+  );
+}
+
+function AuditCard({ row, navigation }: { row: AuditHistoryRow; navigation: any }) {
+  const date = new Date(row.audit_date + 'T00:00:00');
+  const clean = row.corrected === 0;
+  return (
+    <RecordCard
+      icon="checkmark-done-outline"
+      tone={clean ? 'neutral' : 'attention'}
+      // Weekly rows are the legacy audits, worth distinguishing in the history.
+      pill={row.audit_type === 'weekly' ? { label: 'Weekly', color: colors.slate } : undefined}
+      // Mono, per the brief — the date IS this record's identifier.
+      code={date.toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: '2-digit' })}
+      lines={[
+        `${row.item_count} item${row.item_count === 1 ? '' : 's'} counted`,
+        row.conducted_by,
+      ]}
+      footPill={{
+        label: clean ? 'All correct' : `${row.corrected} corrected`,
+        color: clean ? colors.primary : colors.accent,
+      }}
+      onPress={() => navigation.navigate('AuditDetail', { auditId: row.id, code: row.audit_code })}
+    />
+  );
+}
+
+function RequestCard({ row, navigation }: { row: MaterialRequestRow; navigation: any }) {
   // A job-card request the store still owes opens the screen that issues it.
   // Everything else is history: the store manager has no order-detail route
-  // registered, so making those rows pressable would navigate to nothing.
+  // registered, so making those cards pressable would navigate to nothing.
   const actionable = row.status === 'pending' && row.origin === 'job_card' && !!row.job_card_id;
   return (
-    <Pressable
+    <RecordCard
+      icon={row.origin === 'auto_stock_ready' ? 'cube-outline' : 'hand-left-outline'}
+      tone={row.status === 'pending' ? 'attention' : 'neutral'}
+      pill={{
+        label: row.status === 'pending' ? 'Waiting' : row.status === 'issued' ? 'Issued' : 'Done',
+        color: REQUEST_STATUS_COLOR[row.status] ?? colors.slate,
+      }}
+      code={row.order_code}
+      lines={[
+        row.origin === 'auto_stock_ready' ? 'Material ready in store' : 'Asked for by the floor',
+        [row.vendor_name, new Date(row.requested_at).toLocaleDateString()]
+          .filter(Boolean).join(' · '),
+      ]}
       onPress={
         actionable
           ? () =>
@@ -373,28 +458,7 @@ function RequestRow({ row, navigation }: { row: MaterialRequestRow; navigation: 
               })
           : undefined
       }
-      disabled={!actionable}
-      style={({ pressed }) => [styles.row, pressed && actionable && styles.rowPressed]}
-      accessibilityRole={actionable ? 'button' : undefined}
-    >
-      <View style={{ flex: 1, gap: 2 }}>
-        <View style={styles.rowTop}>
-          <Text style={styles.code}>{row.order_code}</Text>
-          <StatusPill
-            label={row.status === 'pending' ? 'Waiting' : row.status === 'issued' ? 'Issued' : 'Done'}
-            color={REQUEST_STATUS_COLOR[row.status] ?? colors.slate}
-          />
-        </View>
-        <Text style={styles.sub}>
-          {row.origin === 'auto_stock_ready' ? 'Material ready in store' : 'Asked for by the floor'}
-          {row.vendor_name ? ` · ${row.vendor_name}` : ''}
-        </Text>
-        <Text style={styles.hint}>
-          {row.request_code} · {new Date(row.requested_at).toLocaleDateString()}
-        </Text>
-      </View>
-      <Ionicons name="chevron-forward" size={18} color={colors.slate} />
-    </Pressable>
+    />
   );
 }
 
@@ -409,21 +473,46 @@ const styles = StyleSheet.create({
     textTransform: 'uppercase',
     letterSpacing: 0.5,
   },
-  row: {
+  scroll: { paddingBottom: spacing.xxl },
+  // The two-column grid. `gap` rather than per-card margins so the last row
+  // stays aligned with the ones above it however many cards it holds — the same
+  // arrangement CardGrid uses on every other dashboard.
+  grid: {
     flexDirection: 'row',
-    alignItems: 'center',
+    flexWrap: 'wrap',
     gap: spacing.md,
     paddingHorizontal: spacing.lg,
-    paddingVertical: spacing.md,
+  },
+  card: {
+    // Just under half so two fit either side of one gap without rounding
+    // overflow. NOT flex: 1 — an odd final card would stretch to full width and
+    // stop reading as part of a grid, which is the bug the dashboards already had.
+    width: '48%',
+    minHeight: 150,
+    padding: spacing.md,
     backgroundColor: colors.surface,
     borderWidth: 1,
     borderColor: colors.border,
     borderRadius: radius.lg,
-    marginBottom: spacing.md,
-    marginHorizontal: spacing.lg,
+    justifyContent: 'space-between',
+    gap: spacing.sm,
   },
-  rowPressed: { backgroundColor: colors.pressed },
-  rowTop: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, flexWrap: 'wrap' },
+  cardPressed: { backgroundColor: colors.pressed },
+  cardTop: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: spacing.xs,
+  },
+  cardBody: { flex: 1, gap: 2 },
+  cardFoot: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: spacing.xs },
+  iconWell: {
+    width: 36,
+    height: 36,
+    borderRadius: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   code: {
     fontFamily: fontFamily.mono,
     fontSize: fontSize.body,
