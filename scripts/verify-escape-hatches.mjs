@@ -76,14 +76,29 @@ console.log('\n=== 2. No stranded repeats remain, and the remedy is self-service
       ? 'no order carries stranded repeats'
       : `STILL STRANDED: ${(strandedOrders.body ?? []).map((o) => `${o.order_code}(${o.stranded})`).join(', ')}`);
 
-  // The nine that were repaired are now genuinely in the loop. One counted
-  // query, not one per row — an earlier version of this fanned out per repeat
-  // and ran the process out of memory.
+  /**
+   * That a repair, IF one happened, left an audit trail.
+   *
+   * This used to require `>= 9` — the number 0063 adopted on the dataset that
+   * existed the day it was written. Resetting the database to the seed baseline
+   * legitimately removes those rows, and the check then failed while reporting
+   * nothing wrong: there were no stranded repeats (asserted above) precisely
+   * because there was nothing to adopt. A test that only passes on one snapshot
+   * of the data is measuring the snapshot, not the behaviour.
+   *
+   * So: any adoption events present must be properly annotated. None present is
+   * a pass, because the line above already proved nothing is stranded.
+   */
   const adopted = await q(
-    'repeat_stage_history?select=id&status=eq.in_progress&note=like.*Adopted%20into%20the%20stage%20loop*',
+    'repeat_stage_history?select=id,status,note&note=like.*Adopted%20into%20the%20stage%20loop*',
     A.fm);
-  chk((adopted.body ?? []).length >= 9,
-    `${(adopted.body ?? []).length} adoption event(s) in history — the repair is auditable, not silent`);
+  const rows = adopted.body ?? [];
+  if (rows.length === 0) {
+    ok('nothing needed adopting on this database — and nothing is stranded');
+  } else {
+    chk(rows.every((r) => r.status === 'in_progress'),
+      `${rows.length} adoption event(s), all landing at in_progress — the repair is auditable, not silent`);
+  }
 
   // Any repeat still at the stranded signature, joined to its order in ONE go.
   const stuck = await q(

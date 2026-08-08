@@ -42,7 +42,7 @@
 -- case in the client.
 --
 -- Both functions are regenerated from their CURRENT bodies (0067 and 0073) with
--- the new branches injected, which is the technique 0073/0076/0077 settled on
+-- the new branches injected, which is the technique 0073/0076b/0077 settled on
 -- after two regressions caused by retyping from an older version.
 -- =============================================================================
 

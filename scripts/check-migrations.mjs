@@ -387,7 +387,7 @@ const MIGRATIONS = [
     note: "0075 only changes the BODY of fm_submit_handover and fm_handover_queue at 0071's signatures, so nothing on the REST surface distinguishes them. `npm run verify:store` section 6 proves the guard by calling the RPC against an order that is NOT finished and requiring a refusal.",
   },
   {
-    file: '0076_mount_on_machine_assignment',
+    file: '0076b_mount_on_machine_assignment',
     // A genuinely detectable one: the function is new, and a nil order id just
     // returns 0 rather than raising, so the probe writes nothing.
     probes: [() => rpc('fm_sync_machine_mounts', { p_order_id: NIL })],

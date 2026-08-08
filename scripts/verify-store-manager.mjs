@@ -79,8 +79,22 @@ const A = {
 };
 const B = { sm: await login('store@beta.test') };
 
-// A unique suffix so repeat runs never collide on the identity index.
-const TAG = Date.now().toString(36).slice(-5).toUpperCase();
+/**
+ * A FIXED suffix, deliberately not a timestamp.
+ *
+ * This used to be `Date.now()`, on the reasoning that a unique tag can never
+ * collide on the identity index. True, and it meant every run minted five NEW
+ * inventory rows — after a dozen runs the store manager's Inventory tab was 50
+ * rows of VB-xxxxx junk with the factory's real stock buried underneath.
+ *
+ * `sm_add_inventory` tops up an item that already exists, which is exactly the
+ * behaviour needed here: a stable tag reuses the same five rows forever. The
+ * assertions check the RESULTING balance and the ledger row, neither of which
+ * needs a virgin row. Nothing can be deleted from the client anyway — there is
+ * no DELETE policy on inventory_items by design — so not creating the mess is
+ * the only fix available.
+ */
+const TAG = 'VFY';
 
 // ---------------------------------------------------------------------------
 console.log('=== 1. inventory_items generalises thread_stock ===');
@@ -228,31 +242,41 @@ console.log('\n=== 3. A manual PO names its procurement person ===');
 // ---------------------------------------------------------------------------
 console.log('\n=== 4. All four types add; sequin CD maths is the database’s ===');
 {
+  /**
+   * Deltas, not absolutes. The tag is now stable (see TAG above) so these rows
+   * are reused across runs and their balances grow — asserting `quantity === 4`
+   * would pass exactly once. What the feature actually promises is that adding N
+   * increases stock by N, which is what is checked here and is the stronger
+   * claim anyway.
+   */
+  const balanceOf = async (code) =>
+    Number(((await rpc('inventory_list', A.sm, {})).body ?? [])
+      .find((i) => i.color_code === code)?.quantity ?? 0);
+
   const adds = [
-    { type: 'thread', args: { p_item_type: 'thread', p_color_code: `VT-${TAG}`, p_quantity: 4 }, expect: 4 },
-    { type: 'tilla',  args: { p_item_type: 'tilla',  p_color_code: `VL-${TAG}`, p_quantity: 12 }, expect: 12 },
-    { type: 'bobbin', args: { p_item_type: 'bobbin', p_color_code: `VB-${TAG}`, p_quantity: 250.5 }, expect: 250.5 },
+    { type: 'thread', code: `VT-${TAG}`, args: { p_item_type: 'thread', p_quantity: 4 }, expect: 4 },
+    { type: 'tilla',  code: `VL-${TAG}`, args: { p_item_type: 'tilla',  p_quantity: 12 }, expect: 12 },
+    { type: 'bobbin', code: `VB-${TAG}`, args: { p_item_type: 'bobbin', p_quantity: 250.5 }, expect: 250.5 },
+    // Decimals must survive — 2.3 cones is the brief's own example.
+    { type: 'thread (decimal)', code: `VD-${TAG}`, args: { p_item_type: 'thread', p_quantity: 2.3 }, expect: 2.3 },
   ];
   for (const a of adds) {
-    const r = await rpc('sm_add_inventory', A.sm, a.args);
-    chk(r.status === 200 && Number(r.body?.quantity) === a.expect,
-      `${a.type}: added ${a.expect} ${r.body?.unit ?? ''} (HTTP ${r.status})`);
+    const before = await balanceOf(a.code);
+    const r = await rpc('sm_add_inventory', A.sm, { ...a.args, p_color_code: a.code });
+    const after = Number(r.body?.quantity ?? 0);
+    chk(r.status === 200 && Math.abs(after - before - a.expect) < 0.001,
+      `${a.type}: +${a.expect} ${r.body?.unit ?? ''} (${before} -> ${after})`);
   }
-
-  // Decimals must survive — 2.3 cones is the brief's own example.
-  const dec = await rpc('sm_add_inventory', A.sm, {
-    p_item_type: 'thread', p_color_code: `VD-${TAG}`, p_quantity: 2.3,
-  });
-  chk(Number(dec.body?.quantity) === 2.3, `decimal quantity kept exactly: ${dec.body?.quantity}`);
 
   // (90 x 914 / 3) x 0.8 = 21936 per CD; 6 CDs = 131616.
   const expected = Math.round(6 * ((90 * 914) / 3) * 0.8);
+  const seqBefore = await balanceOf(`VS-${TAG}`);
   const seq = await rpc('sm_add_inventory', A.sm, {
     p_item_type: 'sequin', p_color_code: `VS-${TAG}`, p_size_mm: 3,
     p_cd_count: 6, p_yards_per_cd: 90, p_sequin_type: 'Matt',
   });
-  chk(seq.status === 200 && Number(seq.body?.quantity) === expected,
-    `6 CDs at 3 mm -> ${seq.body?.quantity} sequins (formula says ${expected})`);
+  chk(seq.status === 200 && Number(seq.body?.quantity) - seqBefore === expected,
+    `6 CDs at 3 mm -> +${Number(seq.body?.quantity) - seqBefore} sequins (formula says ${expected})`);
   chk(Number(seq.body?.cd_count) === 6,
     'the CD count entered is kept alongside the computed total');
 

@@ -7,7 +7,8 @@
  * stays `in_finishing` until final QA moves it to `ready_for_delivery`. The
  * condition that matters is per-repeat, which is what the gate now reads.
  *
- *   node scripts/drive-to-handover.mjs [alpha]
+ *   node scripts/drive-to-handover.mjs [alpha]              walk to handover
+ *   node scripts/drive-to-handover.mjs [alpha] --fixture    stop in production
  *
  * WHY THIS EXISTS SEPARATELY FROM walk-order-lifecycle
  * ---------------------------------------------------
@@ -34,6 +35,14 @@ const env = Object.fromEntries(
 );
 const URL_ = env.EXPO_PUBLIC_SUPABASE_URL, KEY = env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
 const FACTORY = (process.argv[2] ?? 'alpha').toLowerCase();
+/**
+ * --fixture leaves the order IN PRODUCTION with two stages instead of walking it
+ * out. verify-stage-handover, verify-five-fixes and verify-escape-hatches all
+ * need a repeat sitting mid-stage and have been failing for want of one — not
+ * because the code is wrong but because nothing in the repo produced that state.
+ * One flag is cheaper than three suites each seeding their own.
+ */
+const FIXTURE = process.argv.includes('--fixture');
 const PHOTO = `${FACTORY}/drive/photo.jpg`;
 
 const T = {}, UID = {};
@@ -158,10 +167,25 @@ step(`all pieces passed -> ${codedQa.body?.status}`);
 // One stage keeps the loop below short; outsourced so the delivery legs and the
 // finishing partner are exercised, which is what mounts and unmounts touch.
 const partner = partners.find((p) => p.stage_type === 'embroidery') ?? partners[0];
+// One stage keeps the walk short; the fixture needs TWO, because that is what
+// verify-stage-handover requires to exercise a mid-sequence handover.
+const stages = [{ stage_type: partner?.stage_type ?? 'embroidery',
+                  is_outsourced: !!partner, sla_hours: 24, partner_id: partner?.id ?? null }];
+if (FIXTURE) {
+  const second = ['press', 'clipping', 'piko'].find((t) => t !== stages[0].stage_type);
+  stages.push({ stage_type: second, is_outsourced: false, sla_hours: 12, partner_id: null });
+  // THREE, not two. verify-stage-handover's own message says ">=2 stages", but
+  // its real condition is a repeat with two stages STILL TO RUN
+  // (current_stage_index <= total - 2), which a two-stage order can never
+  // satisfy for a repeat starting at index 1. Two stages produced the same
+  // "no suitable order" failure as none at all.
+  const third = ['press', 'clipping', 'piko', 'embroidery']
+    .find((t) => !stages.some((st) => st.stage_type === t));
+  if (third) stages.push({ stage_type: third, is_outsourced: false, sla_hours: 12, partner_id: null });
+}
 const seq = await rpc('floor', 'fm_set_stage_sequence', {
   p_order_id: orderId,
-  p_stages: [{ stage_type: partner?.stage_type ?? 'embroidery',
-               is_outsourced: !!partner, sla_hours: 24, partner_id: partner?.id ?? null }],
+  p_stages: stages,
 });
 if (!seq.ok) bail(`fm_set_stage_sequence: ${seq.msg}`);
 
@@ -215,6 +239,17 @@ step(`assigned ${machine.name}; ${(mounted.body ?? []).length} item(s) now ON MA
 const start = await rpc('floor', 'fm_start_production', { p_order_id: orderId });
 if (!start.ok) bail(`fm_start_production: ${start.msg}`);
 step('production started');
+
+if (FIXTURE) {
+  const reps = await get('floor', `repeats?sheet_id=in.(${sheets.map((s2) => s2.id).join(',')})&select=repeat_code,current_status`);
+  step(`fixture ready: ${orderCode} in production, ${stages.length} stages, ` +
+       `${reps.length} repeat(s) at ${[...new Set(reps.map((r) => r.current_status))].join('/')}`);
+  console.log(
+    '\n  Now run the suites that need a mid-stage repeat:\n' +
+    '    npm run verify:handover   npm run verify:fivefixes   npm run verify:escapes\n'
+  );
+  process.exit(0);
+}
 
 // ---------------------------------------------------------------------------
 // 6. The per-repeat stage loop

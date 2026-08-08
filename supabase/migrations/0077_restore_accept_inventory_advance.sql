@@ -25,7 +25,7 @@
 -- THE LESSON, WRITTEN DOWN
 -- ------------------------
 -- Rewriting a function by copying an older migration's body drops every change
--- made between that migration and now. The safe way — used for 0073 and 0076 —
+-- made between that migration and now. The safe way — used for 0073 and 0076b —
 -- is to extract the CURRENT text and inject the one line, rather than retyping
 -- from the earliest version that happens to be easy to find.
 --
@@ -94,7 +94,7 @@ grant execute on function public.fm_accept_inventory(uuid, text) to authenticate
 -- current one.
 --
 -- Below is 0051's body with 0071's two additions layered on. The inline mounting
--- block 0071 added is replaced by a call to `fm_sync_machine_mounts` (0076) —
+-- block 0071 added is replaced by a call to `fm_sync_machine_mounts` (0076b) —
 -- one definition of what "mounted" means, rather than two that can disagree.
 -- ---------------------------------------------------------------------------
 create or replace function public.sm_issue_materials(
@@ -162,9 +162,9 @@ begin
    where job_card_id = p_job_card_id and status = 'pending';
 
   -- Mount whatever is now signed out, IF the order already has a machine. It
-  -- usually does not at this point (see 0076) — the sync is idempotent and a
+  -- usually does not at this point (see 0076b) — the sync is idempotent and a
   -- no-op without a machine, so calling it here costs nothing and covers the
-  -- re-issue case that 0076's assignment-time call cannot.
+  -- re-issue case that 0076b's assignment-time call cannot.
   perform public.fm_sync_machine_mounts(v_card.order_id);
 
   if v_lines = 0 then
