@@ -367,7 +367,15 @@ console.log('\n=== 6. Handover: decimal leftovers, On Machine kept separate ==='
     const issued = await q(
       'material_issues?select=order_id,orders(id,order_code,status)' +
       '&orders.status=in.(job_card_confirmed,in_production,in_finishing)&limit=5', A.fm);
-    const o = (issued.body ?? []).map((m) => m.orders).filter(Boolean)[0];
+    // Exclude orders that already HAVE a handover. Otherwise the refusal comes
+    // back as "already handed over to the store" — a true refusal for the wrong
+    // reason, which would report a pass without testing the precondition.
+    const handed = new Set(
+      ((await q('fm_handovers?select=order_id', A.fm)).body ?? []).map((h) => h.order_id)
+    );
+    const o = (issued.body ?? [])
+      .map((m) => m.orders)
+      .filter((x) => x && !handed.has(x.id))[0];
     if (!o) {
       console.log('  ..    no in-flight order either; the credit path is UNPROVEN in this run');
     } else {

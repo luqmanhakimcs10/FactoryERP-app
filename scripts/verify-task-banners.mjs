@@ -114,9 +114,18 @@ for (const [name, email] of ROLES) {
     chk(rows.length === Number(b.count),
       `  "${b.banner_title}" -> list has ${rows.length} (banner says ${b.count})`);
 
-    // Plain language, not state-machine vocabulary.
-    chk(!/_/.test(b.banner_title) && /\b(need|ready|waiting|to )\b/i.test(b.banner_title),
-      `  wording is plain: "${b.banner_title}"`);
+    /**
+     * Plain language, not state-machine vocabulary.
+     *
+     * This used to whitelist the verbs `need|ready|waiting|to `, which made it a
+     * spelling test rather than a wording test. It failed on "1 shift still
+     * open" and on every title once the verbs were corrected to agree with their
+     * counts ("needs" for one item) — all perfectly plain English. What actually
+     * matters is that a title carries no snake_case identifier and leads with the
+     * count, so that is what is checked.
+     */
+    chk(!/_/.test(b.banner_title) && /^\d+\s+\S/.test(b.banner_title),
+      `  wording is plain, count-first: "${b.banner_title}"`);
 
     // Every offered queue must have a destination.
     const route = ROUTES[b.queue_key];
