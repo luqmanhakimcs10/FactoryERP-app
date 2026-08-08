@@ -72,7 +72,7 @@ begin
      where o.factory_id = v_factory and o.status in ('awaiting_job_card','job_card_shared');
     if n > 0 then
       return query select 'awaiting_job_card', 'Orders awaiting a job card', n,
-        n || ' order' || case when n = 1 then '' else 's' end || ' need a job card',
+        n || ' order' || case when n = 1 then '' else 's' end || case when n = 1 then ' needs' else ' need' end || ' a job card',
         'Set the stage sequence so production can be planned',
         v_role = 'floor_manager';
     end if;
@@ -108,7 +108,7 @@ begin
      where r.factory_id = v_factory and r.current_status = 'awaiting_final_qa';
     if n > 0 then
       return query select 'fm_final_qa', 'Awaiting your final QA', n,
-        n || ' piece' || case when n = 1 then '' else 's' end || ' need final QA',
+        n || ' piece' || case when n = 1 then '' else 's' end || case when n = 1 then ' needs' else ' need' end || ' final QA',
         'Check each one before it goes to QA for the final pass',
         v_role = 'floor_manager';
     end if;
@@ -149,7 +149,7 @@ begin
        and not exists (select 1 from public.fm_handovers h where h.order_id = o.id);
     if n > 0 then
       return query select 'fm_store_handover', 'Material to hand back', n,
-        n || ' order' || case when n = 1 then '' else 's' end || ' need material handed back',
+        n || ' order' || case when n = 1 then '' else 's' end || case when n = 1 then ' needs' else ' need' end || ' material handed back',
         'Log what is left over so it goes back into store stock',
         v_role = 'floor_manager';
     end if;
@@ -164,7 +164,7 @@ begin
        and mr.status = 'pending';
     if n > 0 then
       return query select 'fm_material_ready', 'Material ready in the store', n,
-        n || ' order' || case when n = 1 then '' else 's' end || ' have material ready',
+        n || ' order' || case when n = 1 then '' else 's' end || case when n = 1 then ' has' else ' have' end || ' material ready',
         'Everything these need is already in stock - collect it when you are ready',
         v_role = 'floor_manager';
     end if;
@@ -206,7 +206,7 @@ begin
     end if;
 
       return query select 'grn_pending', 'Deliveries to confirm', n,
-        n || ' deliver' || case when n = 1 then 'y' else 'ies' end || ' need checking in',
+        n || ' deliver' || case when n = 1 then 'y' else 'ies' end || case when n = 1 then ' needs' else ' need' end || ' checking in',
         'Confirm what actually arrived against the purchase order',
         v_role = 'store_manager';
     end if;
@@ -217,7 +217,7 @@ begin
      where o.factory_id = v_factory and o.status in ('awaiting_cloth_inspection','awaiting_coding');
     if n > 0 then
       return query select 'qa_inspection', 'Orders awaiting inspection', n,
-        n || ' order' || case when n = 1 then '' else 's' end || ' need inspection',
+        n || ' order' || case when n = 1 then '' else 's' end || case when n = 1 then ' needs' else ' need' end || ' inspection',
         'Check the cloth, then code each piece',
         v_role = 'qa';
     end if;
@@ -226,7 +226,7 @@ begin
      where r.factory_id = v_factory and r.current_status = 'stage_qa';
     if n > 0 then
       return query select 'qa_stage', 'Stage QA waiting', n,
-        n || ' piece' || case when n = 1 then '' else 's' end || ' need stage QA',
+        n || ' piece' || case when n = 1 then '' else 's' end || case when n = 1 then ' needs' else ' need' end || ' stage QA',
         'Pass or mark damage before the stage can move on',
         v_role = 'qa';
     end if;
@@ -235,7 +235,7 @@ begin
      where r.factory_id = v_factory and r.current_status = 'awaiting_qa_final';
     if n > 0 then
       return query select 'qa_final', 'Final pass waiting', n,
-        n || ' piece' || case when n = 1 then '' else 's' end || ' need a final pass',
+        n || ' piece' || case when n = 1 then '' else 's' end || case when n = 1 then ' needs' else ' need' end || ' a final pass',
         'Photograph the finished product and pass it',
         v_role = 'qa';
     end if;
@@ -312,7 +312,7 @@ begin
          and r.current_partner_id = v_partner and r.partner_ready_at is null;
       if n > 0 then
         return query select 'partner_active', 'Work with you now', n,
-          n || ' piece' || case when n = 1 then '' else 's' end || ' need your work',
+          n || ' piece' || case when n = 1 then '' else 's' end || case when n = 1 then ' needs' else ' need' end || ' your work',
           'Mark each one finished when you are done with it',
         true;
       end if;
@@ -328,7 +328,7 @@ begin
        and (v_role = 'company_admin' or o.created_by = v_uid);
     if n > 0 then
       return query select 'ot_returns', 'Returns to complete', n,
-        n || ' return' || case when n = 1 then '' else 's' end || ' need completing',
+        n || ' return' || case when n = 1 then '' else 's' end || case when n = 1 then ' needs' else ' need' end || ' completing',
         'Photograph each piece as it goes back to the vendor',
         v_role = 'order_taker';
     end if;
@@ -386,7 +386,7 @@ begin
      where po.factory_id = v_factory and po.status = 'executed';
     if n > 0 then
       return query select 'po_bill', 'Supplier bills to upload', n,
-        n || ' purchase order' || case when n = 1 then '' else 's' end || ' need a supplier bill',
+        n || ' purchase order' || case when n = 1 then '' else 's' end || case when n = 1 then ' needs' else ' need' end || ' a supplier bill',
         'Sent to the supplier — upload the bill to send it for approval',
         v_role = 'procurement';
     end if;
