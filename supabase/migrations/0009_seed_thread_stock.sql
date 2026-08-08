@@ -27,4 +27,15 @@ values
 -- its balance here would silently erase that history from the balance while
 -- leaving the ledger itself intact, exactly what happened when this file was
 -- accidentally re-applied against a live database.
-on conflict (factory_id, color_code) do nothing;
+--
+-- NO CONFLICT TARGET, deliberately. This used to name `(factory_id,
+-- color_code)`, which was the unique constraint until 0068 replaced it: colour
+-- alone no longer identifies a row now that a red thread and a red tilla both
+-- exist, so the new index includes item_type and the sequin attributes. A named
+-- target has to match an index exactly, so this file failed with 42P10 against
+-- any database that had run 0068.
+--
+-- Bare DO NOTHING needs no inference at all, so it is correct on BOTH schemas:
+-- the pre-0068 table and the post-0068 view. That is what a seed wants anyway —
+-- "skip anything already there", whatever makes it a duplicate.
+on conflict do nothing;

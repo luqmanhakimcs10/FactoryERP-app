@@ -322,7 +322,42 @@ console.log('\n=== 6. Handover: decimal leftovers, On Machine kept separate ==='
   const target = (queue.body ?? [])[0];
 
   if (!target) {
-    ok('nothing finished is awaiting handover right now (queue empty, not broken)');
+    /**
+     * An empty queue used to end this section with a pass, which meant the whole
+     * handover bullet could report green having exercised nothing. It now proves
+     * what CAN be proved without a finished order: that the guard 0075 added
+     * actually refuses, from the database rather than from the queue's filter.
+     */
+    console.log('  ..    no finished order awaiting handover — testing the guard instead');
+
+    const unfinished = await q(
+      'orders?select=id,order_code,status&status=in.(job_card_confirmed,in_production)&limit=1', A.fm);
+    const o = (unfinished.body ?? [])[0];
+    if (!o) {
+      console.log('  ..    no in-flight order either; the credit path is UNPROVEN in this run');
+    } else {
+      const lines = await rpc('fm_handover_lines', A.fm, { p_order_id: o.id });
+      const rows = lines.body ?? [];
+      chk(lines.status === 200,
+        `fm_handover_lines works on an in-flight order -> HTTP ${lines.status}`);
+
+      if (rows.length > 0) {
+        const bad = await rpc('fm_submit_handover', A.fm, {
+          p_order_id: o.id,
+          p_items: [{ inventory_item_id: rows[0].inventory_item_id,
+                      issued_quantity: Number(rows[0].issued_quantity),
+                      leftover_quantity: 1, on_machine: false }],
+        });
+        chk(bad.status >= 400,
+          `handing back for ${o.order_code} (${o.status}) is refused (HTTP ${bad.status})`);
+        chk(String(bad.body?.message ?? '').includes('finished'),
+          `and the reason names the real precondition: "${bad.body?.message ?? ''}"`);
+      } else {
+        console.log(`  ..    ${o.order_code} has no issued material; nothing to attempt`);
+      }
+      console.log('  ..    the leftover-CREDITS-stock path is still UNPROVEN — needs an order');
+      console.log('        driven through to awaiting_final_qa with material issued');
+    }
   } else {
     const lines = await rpc('fm_handover_lines', A.fm, { p_order_id: target.order_id });
     chk(lines.status === 200 && (lines.body ?? []).length > 0,

@@ -133,9 +133,18 @@ function bail(why) {
     vendors = await get('order', 'vendors?select=id,name&deleted_at=is.null&limit=1');
   }
   if (!vendors.body?.length) bail(`${FACTORY} has no vendors and one could not be created`);
-  const stock = await get('order', 'thread_stock?select=color_code&limit=1');
+  // Ordered by quantity, not `limit=1` off an unordered read. This walk needs
+  // the SUFFICIENT-stock branch of submit_order, and an arbitrary colour is not
+  // that: it picked up a 4-cone row left behind by another test suite, went to
+  // awaiting_procurement, and stopped at step 1 reporting a pass. The colour
+  // with the most stock is the one this walk has always meant.
+  const stock = await get(
+    'order',
+    'thread_stock?select=color_code,quantity_meters&order=quantity_meters.desc&limit=1'
+  );
   if (!stock.body?.length) bail(`${FACTORY} has no thread stock seeded`);
   const color = stock.body[0].color_code;
+  info(`using ${color} (${Number(stock.body[0].quantity_meters).toLocaleString()} in stock)`);
 
   const created = await rpc('order', 'create_order', {
     p_vendor_id: vendors.body[0].id,
