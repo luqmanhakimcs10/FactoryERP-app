@@ -1,6 +1,11 @@
 /**
- * Drive ONE clean order from creation to `awaiting_final_qa`, so the handover
+ * Drive ONE clean order until every repeat has left the floor, so the handover
  * back to the store can actually be exercised.
+ *
+ * Note it does NOT drive to `orders.status = 'awaiting_final_qa'`. That value is
+ * in the orders CHECK constraint but nothing ever sets it (see 0078): an order
+ * stays `in_finishing` until final QA moves it to `ready_for_delivery`. The
+ * condition that matters is per-repeat, which is what the gate now reads.
  *
  *   node scripts/drive-to-handover.mjs [alpha]
  *
@@ -31,7 +36,7 @@ const URL_ = env.EXPO_PUBLIC_SUPABASE_URL, KEY = env.EXPO_PUBLIC_SUPABASE_ANON_K
 const FACTORY = (process.argv[2] ?? 'alpha').toLowerCase();
 const PHOTO = `${FACTORY}/drive/photo.jpg`;
 
-const T = {};
+const T = {}, UID = {};
 const login = async (who) => {
   const r = await fetch(`${URL_}/auth/v1/token?grant_type=password`, {
     method: 'POST', headers: { apikey: KEY, 'Content-Type': 'application/json' },
@@ -40,6 +45,7 @@ const login = async (who) => {
   const j = await r.json();
   if (!j.access_token) throw new Error(`login failed: ${who}@${FACTORY}.test`);
   T[who] = j.access_token;
+  UID[who] = j.user?.id;
   return j.access_token;
 };
 const rpc = async (who, name, args = {}) => {
@@ -74,8 +80,30 @@ let partners = await get('floor', 'finishing_partners?select=id,name,stage_type&
 step(`masters: ${vendors.length} client(s), ${partners.length} finishing partner(s)`);
 
 // A machine with a worker to run it, for the machine-assignment step.
-const machines = await get('floor', 'machines?select=id,name,managed_by&deleted_at=is.null');
+//
+// `assert_my_machine` lets a company_admin see every machine but a FLOOR MANAGER
+// only the ones they manage — an unmanaged machine 404s for them, deliberately.
+// A freshly reset masters table has managed_by null everywhere, so the owner
+// assigns one here. That is a setup action the owner really does own, not a
+// workaround for the rule.
+let machines = await get('floor', 'machines?select=id,name,managed_by&deleted_at=is.null');
 if (!machines.length) bail('no machine master — add one first');
+
+if (!machines.some((m) => m.managed_by === UID.floor)) {
+  const all = await get('owner', 'machines?select=id,name,managed_by&deleted_at=is.null&limit=1');
+  if (!all.length) bail('no machine visible even to the owner');
+  const r = await fetch(`${URL_}/rest/v1/machines?id=eq.${all[0].id}`, {
+    method: 'PATCH',
+    headers: { apikey: KEY, Authorization: `Bearer ${T.owner}`,
+               'Content-Type': 'application/json', Prefer: 'return=representation' },
+    body: JSON.stringify({ managed_by: UID.floor }),
+  });
+  if (!r.ok) bail(`could not give ${all[0].name} to the floor manager: HTTP ${r.status}`);
+  step(`owner assigned ${all[0].name} to the floor manager`);
+  machines = await get('floor', 'machines?select=id,name,managed_by&deleted_at=is.null');
+}
+const managed = machines.filter((m) => m.managed_by === UID.floor);
+if (!managed.length) bail('the floor manager still manages no machine');
 const workers = await get('floor', "profiles?select=id,display_name&role=eq.worker&is_active=is.true&limit=1");
 if (!workers.length) bail('no active worker to open a shift with');
 
@@ -169,7 +197,7 @@ step(`issued ${issued.body?.lines} line(s), ${issued.body?.total_meters} total; 
 // This is the step that proves 0076: the machine only becomes known here, which
 // is why mounting had to move out of sm_issue_materials.
 // ---------------------------------------------------------------------------
-const machine = machines[0];
+const machine = managed[0];
 const assign = await rpc('floor', 'fm_assign_machine_with_shift', {
   p_order_id: orderId,
   p_machine_id: machine.id,

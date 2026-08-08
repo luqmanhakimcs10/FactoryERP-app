@@ -391,7 +391,7 @@ console.log('\n=== 6. Handover: decimal leftovers, On Machine kept separate ==='
         console.log(`  ..    ${o.order_code} has no issued material; nothing to attempt`);
       }
       console.log('  ..    the leftover-CREDITS-stock path is still UNPROVEN — needs an order');
-      console.log('        driven through to awaiting_final_qa with material issued');
+      console.log('        whose repeats have all left the floor. `npm run drive:handover`.');
     }
   } else {
     const lines = await rpc('fm_handover_lines', A.fm, { p_order_id: target.order_id });

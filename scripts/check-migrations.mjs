@@ -398,6 +398,11 @@ const MIGRATIONS = [
     note: "body-only fixes to fm_accept_inventory (0041's status advance) and sm_issue_materials (0051's zero-requirement guard) at their existing signatures — nothing on the REST surface tells the restored versions from the broken ones. `npm run drive:handover` is what proves it: without 0077 the drive stops dead at machine assignment because the order never leaves job_card_confirmed.",
   },
   {
+    file: '0078_handover_gate_from_repeats',
+    // Detectable: fm_floor_is_finished is new and returns false for a nil id.
+    probes: [() => rpc('fm_floor_is_finished', { p_order_id: NIL })],
+  },
+  {
     file: '0073_fix_grn_queue_join',
     probes: [() => rpc('my_queue_items', { p_queue_key: 'grn_pending' })],
     note: "same signature as 0066/0067 — only the grns join changed, so this probe cannot tell the fixed version from the broken one. It CAN be told apart by data: with at least one pending GRN, the broken version raises 42703 and the fixed one returns rows. `npm run verify:store` section 8 does exactly that.",
