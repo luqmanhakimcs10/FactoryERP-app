@@ -320,6 +320,62 @@ const MIGRATIONS = [
       () => rpc('ot_complete_qa_return', { p_damage_id: NIL }),
     ],
   },
+
+  // ---- Store Manager restructure ----
+  {
+    file: '0068_inventory_items_generalization',
+    probes: [
+      () => col('inventory_items', 'item_type'),
+      () => col('inventory_items', 'source'),
+      () => col('purchase_orders', 'origin'),
+      // thread_stock must STILL answer — it is a view over the same rows now,
+      // and everything from Phase 3/4 onward reads it.
+      () => col('thread_stock', 'quantity_meters'),
+      () => rpc('inventory_unit', { p_item_type: 'thread' }),
+    ],
+  },
+  {
+    file: '0069_store_manager_restructure_schema',
+    probes: [
+      () => col('material_requests', 'directed_to'),
+      () => col('machine_mounted_items', 'mounted_at'),
+      () => col('fm_handover_items', 'leftover_quantity'),
+      () => col('purchase_orders', 'assigned_procurement_user_id'),
+      () => rpc('sequin_count_from_cds', { p_cd_count: 1, p_size_mm: 3 }),
+    ],
+  },
+  {
+    file: '0070_store_manager_restructure_functions',
+    probes: [
+      () => rpc('inventory_list', { p_item_type: 'thread' }),
+      () => rpc('sm_po_list'),
+      () => rpc('procurement_users'),
+      () => rpc('material_request_history'),
+      // Deliberately invalid: an unknown type is refused during validation, so
+      // the probe proves existence without writing anything.
+      () => rpc('sm_add_inventory', { p_item_type: 'PROBE', p_color_code: 'PROBE' }),
+    ],
+  },
+  {
+    file: '0071_shortfall_split_issue_and_handover',
+    probes: [
+      () => rpc('fm_handover_queue'),
+      () => rpc('fm_handover_lines', { p_order_id: NIL }),
+      () => rpc('fm_submit_handover', { p_order_id: NIL, p_items: [] }),
+    ],
+    note: "submit_order, sm_issue_materials and fm_accept_inventory are also rewritten here at their EXISTING signatures, so no probe can tell 0071's versions from the older ones. `npm run verify:store` is what proves the shortfall split and the mounting are live.",
+  },
+  {
+    file: '0072_daily_audit',
+    probes: [
+      () => rpc('audit_today_state'),
+      () => rpc('audit_walk_items'),
+      () => rpc('audit_history', { p_limit: 1 }),
+      () => rpc('audit_detail', { p_audit_id: NIL }),
+      () => col('stock_audits', 'audit_type'),
+      () => col('stock_audit_items', 'marked_correct'),
+    ],
+  },
 ];
 
 /** Policy-only or repair migrations that leave no fingerprint a client can read. */

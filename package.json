@@ -55,7 +55,9 @@
     "verify:escapes": "node scripts/verify-escape-hatches.mjs",
     "verify:banners": "node scripts/verify-task-banners.mjs",
     "audit:banners": "node scripts/audit-banner-coverage.mjs",
-    "shots:banners": "node scripts/banner-shots.mjs"
+    "verify:fresh": "node scripts/verify-fresh-db.mjs",
+    "shots:banners": "node scripts/banner-shots.mjs",
+    "verify:store": "node scripts/verify-store-manager.mjs"
   },
   "private": true
 }

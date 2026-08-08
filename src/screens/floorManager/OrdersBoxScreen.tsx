@@ -25,6 +25,7 @@ import { listPendingMaterialAcceptance, acceptInventory } from '../../api/endpoi
 import { uploadOrderPhoto } from '../../api/endpoints/storage';
 import { useAuth } from '../../auth/AuthContext';
 import { useNextStep, NEXT_STEP } from '../../components/ui/NextStepToast';
+import { getHandoverQueue } from '../../api/endpoints/storeManager';
 import { describeDbError } from '../../utils/errors';
 import type { OrderListRow, OrderStatus } from '../../models/orderTypes';
 import type { PendingMaterialIssueRow } from '../../models/inventoryTypes';
@@ -52,7 +53,7 @@ const ACTIVE_STATUSES: OrderStatus[] = [
 ];
 const JOB_CARD_STATUSES: OrderStatus[] = ['awaiting_job_card', 'job_card_shared'];
 
-type TabKey = 'overview' | 'job_card' | 'accept_inventory' | 'final_qa';
+type TabKey = 'overview' | 'job_card' | 'accept_inventory' | 'final_qa' | 'handover';
 
 export function OrdersBoxScreen() {
   const navigation = useNavigation<any>();
@@ -84,6 +85,12 @@ export function OrdersBoxScreen() {
     queryFn: listPendingMaterialAcceptance,
   });
 
+  // Finished orders whose leftover material has not been handed back yet.
+  const { data: handoverQueue } = useQuery({
+    queryKey: ['handoverQueue'],
+    queryFn: getHandoverQueue,
+  });
+
   const startProductionMutation = useMutation({
     mutationFn: (orderId: string) => startProduction(orderId),
     onSuccess: () => {
@@ -109,6 +116,10 @@ export function OrdersBoxScreen() {
             label: `Accept inventory${pendingMaterial?.length ? ` (${pendingMaterial.length})` : ''}`,
           },
           { key: 'final_qa', label: 'Final QA' },
+          {
+            key: 'handover',
+            label: `Handover${handoverQueue?.length ? ` (${handoverQueue.length})` : ''}`,
+          },
         ]}
       />
 
@@ -223,6 +234,49 @@ export function OrdersBoxScreen() {
           </Text>
           <AppButton title="Open Final QA queue" onPress={() => navigation.navigate('FinalQaQueue')} />
         </View>
+      ) : null}
+
+      {/* Handing leftover material back to the store once an order is done.
+          Lives here rather than on a dashboard card because it is a per-order
+          action on a finished order, which is exactly what this box holds. */}
+      {activeTab === 'handover' ? (
+        <FlatList
+          data={handoverQueue ?? []}
+          keyExtractor={(o) => o.order_id}
+          initialNumToRender={20}
+          windowSize={21}
+          removeClippedSubviews={false}
+          ListHeaderComponent={
+            <Text style={styles.body}>
+              Finished orders that still have material signed out to the floor. Log what is left
+              over and it goes back into store stock.
+            </Text>
+          }
+          ListEmptyComponent={
+            <Text style={styles.emptyBody}>Nothing waiting to be handed back.</Text>
+          }
+          renderItem={({ item }) => (
+            <View style={styles.handoverRow}>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.handoverCode}>{item.order_code}</Text>
+                <Text style={styles.emptyBody}>
+                  {item.vendor_name ?? 'No client'} · {item.line_count} item
+                  {item.line_count === 1 ? '' : 's'} issued
+                </Text>
+              </View>
+              <AppButton
+                title="Hand over"
+                size="sm"
+                onPress={() =>
+                  navigation.navigate('HandoverToStore', {
+                    orderId: item.order_id,
+                    orderCode: item.order_code,
+                  })
+                }
+              />
+            </View>
+          )}
+        />
       ) : null}
     </Screen>
   );
@@ -494,6 +548,25 @@ function OrderRow({
 }
 
 const styles = StyleSheet.create({
+  handoverRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.md,
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.md,
+    backgroundColor: colors.surface,
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: radius.lg,
+    marginHorizontal: spacing.lg,
+    marginBottom: spacing.md,
+  },
+  handoverCode: {
+    fontFamily: fontFamily.mono,
+    fontSize: fontSize.body,
+    color: colors.ink,
+    fontWeight: fontWeight.medium,
+  },
   content: { padding: spacing.xl, gap: spacing.lg },
   body: { fontSize: fontSize.secondary, color: colors.slate, lineHeight: 20 },
   counter: { margin: spacing.lg, marginBottom: spacing.sm },

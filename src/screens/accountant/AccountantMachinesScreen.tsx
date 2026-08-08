@@ -24,7 +24,8 @@ import { useAuth } from '../../auth/AuthContext';
 import { isModuleEnabled } from '../../utils/permissions';
 import { MODULES } from '../../constants/roles';
 import { describeDbError, MODULE_DISABLED_MESSAGE } from '../../utils/errors';
-import { colors } from '../../constants/theme';
+import { OnMachinePanel } from '../../components/ui/OnMachinePanel';
+import { colors, spacing } from '../../constants/theme';
 import {
   count,
   shortDate,
@@ -179,6 +180,12 @@ export function AccountantMachineDetailScreen() {
               <Text style={styles.subtitle}>
                 {machine ? machineType(machine.machine_type) : 'Machine'}
               </Text>
+            </View>
+
+            {/* What is loaded on this machine right now — driven by material
+                issue against its active job card. Renders nothing when idle. */}
+            <View style={{ marginBottom: spacing.lg }}>
+              <OnMachinePanel machineId={machineId} />
             </View>
 
             <SectionTitle>Machine</SectionTitle>

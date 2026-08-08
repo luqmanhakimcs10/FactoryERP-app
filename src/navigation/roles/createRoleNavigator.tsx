@@ -42,6 +42,13 @@ import { GrnDetailScreen } from '../../screens/storeManager/GrnDetailScreen';
 import { MaterialIssueQueueScreen } from '../../screens/storeManager/MaterialIssueQueueScreen';
 import { IssueDetailScreen } from '../../screens/storeManager/IssueDetailScreen';
 import { StockAuditScreen } from '../../screens/storeManager/StockAuditScreen';
+// ---- Store Manager restructure: PO / Inventory / Audit / Requests ----
+import { StoreManagerHomeScreen } from '../../screens/storeManager/StoreManagerHomeScreen';
+import { AddInventoryScreen } from '../../screens/storeManager/AddInventoryScreen';
+import { StoreNewPoScreen } from '../../screens/storeManager/StoreNewPoScreen';
+import { DailyAuditScreen } from '../../screens/storeManager/DailyAuditScreen';
+import { AuditDetailScreen } from '../../screens/storeManager/AuditDetailScreen';
+import { HandoverToStoreScreen } from '../../screens/floorManager/HandoverToStoreScreen';
 import { OpeningStockScreen } from '../../screens/storeManager/OpeningStockScreen';
 import { MachineListScreen } from '../../screens/floorManager/MachineListScreen';
 import { MachineWorkforceScreen } from '../../screens/floorManager/MachineWorkforceScreen';
@@ -130,7 +137,9 @@ function homeFor(role: Role): React.ComponentType {
     case ROLES.PROCUREMENT:
       return PoQueueScreen;
     case ROLES.STORE_MANAGER:
-      return StockHomeScreen;
+      // Four tabs and nothing else. Stock Home is still registered for other
+      // roles that reach it, but it is no longer this role's landing screen.
+      return StoreManagerHomeScreen;
     case ROLES.ACCOUNTANT:
       // Six boxes and nothing else. The Phase 7 Ledgers Home is still reachable
       // from the Invoices box for loans and payment history.
@@ -364,8 +373,38 @@ export function createRoleNavigator(role: Role) {
               options={{ title: 'Material issue' }}
             />
             <Stack.Screen name="IssueDetail" component={IssueDetailScreen} options={{ title: 'Issue materials' }} />
+            {/* The weekly audit screen stays registered but is no longer linked
+                from anywhere: the Store Manager's Audit tab is daily now. It is
+                left in place so a factory mid-way through the old flow can still
+                reach a bookmarked route rather than hitting a dead link. */}
             <Stack.Screen name="StockAudit" component={StockAuditScreen} options={{ title: 'Stock audit' }} />
             <Stack.Screen name="OpeningStock" component={OpeningStockScreen} options={{ title: 'Opening stock' }} />
+
+            {/* ---- The four tabs' own screens ---- */}
+            <Stack.Screen
+              name="AddInventory"
+              component={AddInventoryScreen}
+              options={{ title: 'Add stock' }}
+            />
+            <Stack.Screen
+              name="StoreNewPo"
+              component={StoreNewPoScreen}
+              options={{ title: 'New purchase order' }}
+            />
+            <Stack.Screen
+              name="DailyAudit"
+              component={DailyAuditScreen}
+              options={{ title: 'Today’s audit' }}
+            />
+            <Stack.Screen
+              name="AuditDetail"
+              component={AuditDetailScreen}
+              options={({ route }: any) => ({ title: route.params?.code ?? 'Audit' })}
+            />
+            {/* The PO tab opens procurement's existing PO screen rather than a
+                store-manager copy of it. Registered here because that screen
+                previously belonged to procurement and the accountant only. */}
+            <Stack.Screen name="PoDetail" component={PoDetailScreen} options={{ title: 'Purchase order' }} />
           </>
         ) : null}
 
@@ -455,6 +494,12 @@ export function createRoleNavigator(role: Role) {
           <>
             <Stack.Screen name="FinalQaQueue" component={FinalQaQueueScreen} options={{ title: 'Final QA' }} />
             <Stack.Screen name="FinalQaDetail" component={FinalQaDetailScreen} options={{ title: 'Final QA' }} />
+            {/* Handing leftover material back to the store, once an order is done. */}
+            <Stack.Screen
+              name="HandoverToStore"
+              component={HandoverToStoreScreen}
+              options={{ title: 'Handover to store' }}
+            />
           </>
         ) : null}
 
