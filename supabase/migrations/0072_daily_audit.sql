@@ -63,9 +63,22 @@ alter table public.stock_audits add constraint stock_audits_type_chk
 
 -- Historic rows were the weekly audit; labelling them 'daily' would be a lie in
 -- the history list the brief asks for.
-update public.stock_audits set audit_type = 'weekly'
- where audit_type = 'daily'
-   and submitted_at < date_trunc('day', now());
+--
+-- DERIVED, not dated. The obvious version tested `submitted_at < today`, which
+-- is right the day this file is first applied and wrong every day after: re-run
+-- it next week and it relabels last week's real daily audits as weekly.
+--
+-- `marked_correct` is only ever written by sm_submit_daily_audit, and that
+-- function refuses an empty item list — so an audit with no marked item cannot
+-- have come from the daily flow, whatever its date. That holds on every re-run.
+update public.stock_audits sa
+   set audit_type = 'weekly'
+ where sa.audit_type = 'daily'
+   and not exists (
+     select 1 from public.stock_audit_items i
+      where i.stock_audit_id = sa.id
+        and i.marked_correct is not null
+   );
 
 /**
  * One daily audit per factory per day.

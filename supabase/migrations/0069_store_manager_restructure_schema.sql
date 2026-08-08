@@ -259,8 +259,11 @@ begin
 
   insert into public.machine_mounted_items
     (factory_id, machine_id, inventory_item_id, job_card_id, quantity, mounted_at)
-  select distinct on (jc.assigned_machine_id, ii.id)
-         mi.factory_id, jc.assigned_machine_id, ii.id, jc.id, mii.issued_meters, mi.issued_at
+  -- The machine lives on ORDERS, not job_cards (0041 added
+  -- `orders.assigned_machine_id`). The job card is still what the mount is
+  -- attributed to, which is why both tables are joined.
+  select distinct on (o.assigned_machine_id, ii.id)
+         mi.factory_id, o.assigned_machine_id, ii.id, jc.id, mii.issued_meters, mi.issued_at
     from public.material_issues mi
     join public.job_cards jc  on jc.id = mi.job_card_id
     join public.orders o      on o.id = mi.order_id
@@ -269,10 +272,12 @@ begin
       on ii.factory_id = mi.factory_id
      and ii.item_type = 'thread'
      and ii.color_code = mii.color_code
-   where jc.assigned_machine_id is not null
+   where o.assigned_machine_id is not null
      and mi.accepted_at is not null
-     and o.status not in ('completed','delivered','cancelled')
-   order by jc.assigned_machine_id, ii.id, mi.issued_at desc
+     -- Only orders still in flight. 'completed' and 'cancelled' are the real
+     -- terminal statuses (see 0026's constraint); there is no 'delivered'.
+     and o.status not in ('completed','cancelled')
+   order by o.assigned_machine_id, ii.id, mi.issued_at desc
   on conflict do nothing;
 end $$;
 

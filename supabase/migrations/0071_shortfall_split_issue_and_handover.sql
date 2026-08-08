@@ -126,6 +126,8 @@ declare
   v_lines   int := 0;
   v_total   numeric := 0;
   v_item_id uuid;
+  -- `assigned_machine_id` is a column on ORDERS (0041), not on job_cards.
+  v_machine uuid;
 begin
   perform public.assert_module('inventory_procurement');
   perform public.assert_role(array['store_manager','company_admin']);
@@ -141,6 +143,9 @@ begin
   if exists (select 1 from public.material_issues where job_card_id = p_job_card_id) then
     raise exception 'Materials have already been issued for this job card.' using errcode = '22023';
   end if;
+
+  select o.assigned_machine_id into v_machine
+    from public.orders o where o.id = v_card.order_id;
 
   insert into public.material_issues
     (factory_id, issue_code, job_card_id, order_id, issued_by, note)
@@ -162,11 +167,11 @@ begin
         coalesce((select order_code from public.orders where id = v_card.order_id), '?')
     );
 
-    -- Mount it on the job card's machine, if one is assigned. Not an error when
+    -- Mount it on the order's machine, if one is assigned. Not an error when
     -- none is: machine assignment happens later in the floor's own flow, and
     -- refusing to issue material over it would block real work for a record
     -- that is only informational.
-    if v_card.assigned_machine_id is not null then
+    if v_machine is not null then
       select id into v_item_id
         from public.inventory_items
        where factory_id = v_factory and item_type = 'thread' and color_code = r.color_code;
@@ -175,7 +180,7 @@ begin
         insert into public.machine_mounted_items
           (factory_id, machine_id, inventory_item_id, job_card_id, quantity, mounted_by)
         values
-          (v_factory, v_card.assigned_machine_id, v_item_id, p_job_card_id,
+          (v_factory, v_machine, v_item_id, p_job_card_id,
            r.required_meters, auth.uid())
         on conflict (machine_id, inventory_item_id) where unmounted_at is null
         do update set quantity    = machine_mounted_items.quantity + excluded.quantity,

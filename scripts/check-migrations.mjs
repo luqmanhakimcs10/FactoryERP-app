@@ -376,6 +376,11 @@ const MIGRATIONS = [
       () => col('stock_audit_items', 'marked_correct'),
     ],
   },
+  {
+    file: '0073_fix_grn_queue_join',
+    probes: [() => rpc('my_queue_items', { p_queue_key: 'grn_pending' })],
+    note: "same signature as 0066/0067 — only the grns join changed, so this probe cannot tell the fixed version from the broken one. It CAN be told apart by data: with at least one pending GRN, the broken version raises 42703 and the fixed one returns rows. `npm run verify:store` section 8 does exactly that.",
+  },
 ];
 
 /** Policy-only or repair migrations that leave no fingerprint a client can read. */

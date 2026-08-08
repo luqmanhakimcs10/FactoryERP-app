@@ -147,9 +147,8 @@ $$;
 update public.inventory_items set unit = public.inventory_unit(item_type)
  where unit is distinct from public.inventory_unit(item_type);
 
--- Existing rows all arrived through a PO, an opening entry or a shortfall —
--- none of them through the manual add this migration introduces.
-update public.inventory_items set source = 'po' where source = 'manual';
+-- (`source` is backfilled in section 5a, once `manual_add` is an allowed
+--  movement type — the rule is derived from the ledger, so it has to come after.)
 
 -- ---------------------------------------------------------------------------
 -- 3. Identity
@@ -259,6 +258,34 @@ update public.stock_movements sm
   from public.inventory_items ii
  where ii.id = sm.thread_stock_id
    and sm.item_type is distinct from ii.item_type;
+
+-- ---------------------------------------------------------------------------
+-- 5a. Where each row's stock came from
+--
+-- DERIVED, not assigned. The obvious version of this was
+--
+--     update inventory_items set source = 'po' where source = 'manual';
+--
+-- which is correct exactly once. Re-run this file after a store manager has
+-- added stock by hand — and re-running is the normal way these get applied — and
+-- it silently relabels all their manual stock as PO. Every row's badge would
+-- then be wrong with nothing to notice it by.
+--
+-- A row is manual iff the ledger contains a manual_add for it. That is a fact
+-- about the data rather than a guess about when this file ran, so it gives the
+-- same answer every time.
+-- ---------------------------------------------------------------------------
+update public.inventory_items ii
+   set source = case
+         when exists (
+           select 1 from public.stock_movements sm
+            where sm.thread_stock_id = ii.id and sm.movement_type = 'manual_add')
+         then 'manual' else 'po' end
+ where ii.source is distinct from case
+         when exists (
+           select 1 from public.stock_movements sm
+            where sm.thread_stock_id = ii.id and sm.movement_type = 'manual_add')
+         then 'manual' else 'po' end;
 
 -- ---------------------------------------------------------------------------
 -- 6. ONE writer for the ledger, for all four types

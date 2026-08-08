@@ -435,5 +435,25 @@ console.log('\n=== 7. None of this leaks across factories ===');
   chk(wrongAudit.status >= 400, `the floor manager cannot submit the audit (HTTP ${wrongAudit.status})`);
 }
 
+// ---------------------------------------------------------------------------
+console.log('\n=== 8. The GRN queue branch actually runs (0073) ===');
+{
+  // `my_queue_items('grn_pending')` joined grns on a column that does not exist.
+  // Every other queue worked and the COUNT was right, so the only symptom was a
+  // banner that opened an erroring list — and only when a pending GRN existed.
+  const r = await rpc('my_queue_items', A.sm, { p_queue_key: 'grn_pending' });
+  chk(r.status === 200,
+    `grn_pending list -> HTTP ${r.status}${r.status !== 200 ? ' ' + JSON.stringify(r.body) : ''}`);
+
+  const pending = await q('grns?select=id&status=eq.pending', A.sm);
+  const n = (pending.body ?? []).length;
+  if (n === 0) {
+    console.log('  ..    no pending GRNs, so this cannot distinguish the fix from the bug');
+  } else {
+    chk((r.body ?? []).length === n,
+      `${n} pending GRN(s) -> ${(r.body ?? []).length} row(s), the join resolves`);
+  }
+}
+
 console.log(`\n================ ${pass} passed, ${fail} failed ================\n`);
 process.exit(fail ? 1 : 0);
