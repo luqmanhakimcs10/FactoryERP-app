@@ -24,9 +24,12 @@ export const QUEUE_SCREEN_TITLE: Record<string, string> = {
   fm_handover: 'Ready to hand over',
   fm_final_qa: 'Need final QA',
   fm_shift_close: 'Shifts still open',
+  fm_store_handover: 'Material to hand back',
+  fm_material_ready: 'Material ready to collect',
   fm_leave: 'Leave requests',
   material_requests: 'Material requests',
   grn_pending: 'Deliveries to confirm',
+  sm_audit_today: 'Daily audit',
   qa_inspection: 'Need inspection',
   qa_stage: 'Need stage QA',
   qa_final: 'Need a final pass',
@@ -80,6 +83,19 @@ export function routeForItem(queueKey: string, item: QueueItem): QueueRoute | nu
         params: { orderId: item.order_id, orderCode: item.order_code },
       };
 
+    case 'fm_store_handover':
+      // Straight into the handover form for that order — the whole point of the
+      // banner is to skip the Orders box and its tab.
+      return {
+        screen: 'HandoverToStore',
+        params: { orderId: item.order_id, orderCode: item.order_code },
+      };
+
+    case 'fm_material_ready':
+      // Acknowledging is a row action on the list, not a per-order screen, so
+      // there is nothing deeper to open (see routeForBanner).
+      return null;
+
     case 'fm_shift_close':
       // secondary_id is the shift — the same param ShiftCloseQueue's own rows
       // pass, so this lands on the identical screen, not a copy of it.
@@ -99,6 +115,10 @@ export function routeForItem(queueKey: string, item: QueueItem): QueueRoute | nu
 
     case 'grn_pending':
       return { screen: 'GrnDetail', params: { grnId: item.secondary_id } };
+
+    case 'sm_audit_today':
+      // One obligation, not a list: the banner opens the walk itself.
+      return { screen: 'DailyAudit' };
 
     // ---- QA ----
     case 'qa_inspection':
@@ -174,6 +194,9 @@ export function routeForBanner(queueKey: string): QueueRoute {
       return { screen: 'OrdersBox', params: { tab: 'accept_inventory' } };
     case 'fm_leave':
       return { screen: 'LeaveBox' };
+    case 'sm_audit_today':
+      // Nothing to filter — there is exactly one thing to do, so go and do it.
+      return { screen: 'DailyAudit' };
     default:
       return { screen: 'TaskQueue', params: { queueKey } };
   }

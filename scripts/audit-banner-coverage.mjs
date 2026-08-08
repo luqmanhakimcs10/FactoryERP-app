@@ -57,13 +57,23 @@ const AUDIT = {
       ['Dashboard card "Leave"', n(await rest('leaves?select=id&status=eq.pending', t)), 'fm_leave'],
       ['Dashboard card "Damages"', n(await rest('damage_records?select=id', t)), '(register, not a queue)'],
       ['Dashboard card "Orders" (total)', n(await rest('orders?select=id', t)), '(registry total)'],
+      // Added by the Store Manager restructure and initially missed — the whole
+      // reason this audit is re-run rather than trusted.
+      ['Orders box tab "Handover"', n(await rpc('fm_handover_queue', t)), 'fm_store_handover'],
+      ['Auto "material ready" notices', n(await rest("material_requests?select=id&origin=eq.auto_stock_ready&directed_to=eq.floor_manager&status=eq.pending", t)), 'fm_material_ready'],
     ],
   },
   'Initial QA': {
     email: 'qa@alpha.test',
     counts: async (t) => [
       ['Card "Awaiting order inspection"', n(await rest('orders?select=id&status=in.(awaiting_cloth_inspection,awaiting_coding)', t)), 'qa_inspection'],
-      ['Card "Repeats & stage tracking"', n(await rest('orders?select=id&status=in.(in_production,in_finishing)', t)), 'qa_stage'],
+      // Orders IN PRODUCTION, which is not the same question as "needs QA".
+      // The actionable subset is qa_stage (repeats sitting at stage_qa) and it
+      // has its own line below. Pairing this card with qa_stage made the audit
+      // report a permanent false gap: a banner reading "N pieces need stage QA"
+      // off this number would send QA to an empty screen.
+      ['Card "Repeats & stage tracking"', n(await rest('orders?select=id&status=in.(in_production,in_finishing)', t)), '(registry total)'],
+      ['Repeats actually at stage QA', n(await rest('repeats?select=id&current_status=eq.stage_qa', t)), 'qa_stage'],
       ['Card "Final pass"', n(await rpc('qa_final_queue', t)), 'qa_final'],
     ],
   },
@@ -72,6 +82,12 @@ const AUDIT = {
     counts: async (t) => [
       ['Card "PO" (deliveries to confirm)', n(await rest('grns?select=id&status=eq.pending', t)), 'grn_pending'],
       ['Stat "Job cards to issue"', n(await rpc('material_issue_queue', t)), 'material_requests'],
+      ['Audit tab — today not done', (await rpc('audit_today_state', t))?.[0]?.done ? 0 : 1, 'sm_audit_today'],
+      // The PO and Requests tab counts are registry views of other people's
+      // work: the store manager's own actionable subsets are grn_pending and
+      // material_requests, both covered above.
+      ['Home tab "PO" (open)', n(await rpc('sm_po_list', t)), '(registry total)'],
+      ['Home tab "Requests" (all)', n(await rpc('material_request_history', t)), '(registry total)'],
     ],
   },
   'Order Taker': {
