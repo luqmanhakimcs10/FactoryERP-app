@@ -387,6 +387,17 @@ const MIGRATIONS = [
     note: "0075 only changes the BODY of fm_submit_handover and fm_handover_queue at 0071's signatures, so nothing on the REST surface distinguishes them. `npm run verify:store` section 6 proves the guard by calling the RPC against an order that is NOT finished and requiring a refusal.",
   },
   {
+    file: '0076_mount_on_machine_assignment',
+    // A genuinely detectable one: the function is new, and a nil order id just
+    // returns 0 rather than raising, so the probe writes nothing.
+    probes: [() => rpc('fm_sync_machine_mounts', { p_order_id: NIL })],
+  },
+  {
+    file: '0077_restore_accept_inventory_advance',
+    probes: [() => rpc('fm_accept_inventory', { p_material_issue_id: NIL, p_photo_url: '' })],
+    note: "body-only fixes to fm_accept_inventory (0041's status advance) and sm_issue_materials (0051's zero-requirement guard) at their existing signatures — nothing on the REST surface tells the restored versions from the broken ones. `npm run drive:handover` is what proves it: without 0077 the drive stops dead at machine assignment because the order never leaves job_card_confirmed.",
+  },
+  {
     file: '0073_fix_grn_queue_join',
     probes: [() => rpc('my_queue_items', { p_queue_key: 'grn_pending' })],
     note: "same signature as 0066/0067 — only the grns join changed, so this probe cannot tell the fixed version from the broken one. It CAN be told apart by data: with at least one pending GRN, the broken version raises 42703 and the fixed one returns rows. `npm run verify:store` section 8 does exactly that.",
