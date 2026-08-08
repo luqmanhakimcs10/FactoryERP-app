@@ -31,19 +31,26 @@ export async function listThreadStock(search?: string): Promise<ThreadStock[]> {
   return (data ?? []) as ThreadStock[];
 }
 
-/** Set (or clear, by passing null) a colour's automatic reorder point. */
+/**
+ * Set (or clear, by passing null) a colour's automatic reorder point.
+ *
+ * Returns a one-row array, not an object: 0074 changed the function to a
+ * `returns table (...)` so it would stop depending on the composite type of the
+ * `thread_stock` view — that dependency made re-running 0068's `drop view`
+ * impossible. The columns are unchanged.
+ */
 export async function setReorderLevels(
   colorCode: string,
   reorderThreshold: number | null,
   reorderQuantity: number | null
-): Promise<ThreadStock> {
+): Promise<ThreadStock | null> {
   const { data, error } = await supabase.rpc('sm_set_reorder_levels', {
     p_color_code: colorCode,
     p_reorder_threshold: reorderThreshold,
     p_reorder_quantity: reorderQuantity,
   });
   if (error) throw error;
-  return data as ThreadStock;
+  return (Array.isArray(data) ? data[0] : data) ?? null;
 }
 
 export async function listPurchaseOrders(statuses?: string[]): Promise<PurchaseOrder[]> {

@@ -117,6 +117,34 @@ console.log('=== 1. inventory_items generalises thread_stock ===');
   });
   const wrote = w.status < 300 && (await w.json().catch(() => [])).length > 0;
   chk(!wrote, `direct UPDATE through the view is still refused (HTTP ${w.status})`);
+
+  /**
+   * sm_set_reorder_levels upserted on `(factory_id, color_code)`, the constraint
+   * 0068 dropped, so it returned 42P10 for every call from the moment 0068
+   * applied. Nothing in the suite called it, which is why a live app function
+   * stayed broken through two rounds of "all passed".
+   */
+  const thread = threads[0];
+  if (thread) {
+    const set = await rpc('sm_set_reorder_levels', A.sm, {
+      p_color_code: thread.color_code,
+      p_reorder_threshold: 1000,
+      p_reorder_quantity: 5000,
+    });
+    chk(set.status === 200,
+      `sm_set_reorder_levels -> HTTP ${set.status}${set.status !== 200 ? ' ' + JSON.stringify(set.body?.message) : ''}`);
+    const row = Array.isArray(set.body) ? set.body[0] : set.body;
+    chk(Number(row?.reorder_threshold) === 1000 && Number(row?.reorder_quantity) === 5000,
+      `the level came back on ${thread.color_code}: ${row?.reorder_threshold}/${row?.reorder_quantity}`);
+    // The shape the app's ThreadStock type expects, not inventory_items'.
+    chk(row && 'quantity_meters' in row && !('item_type' in row),
+      'it returns the thread_stock column shape the caller already knows');
+
+    const bad = await rpc('sm_set_reorder_levels', A.sm, {
+      p_color_code: thread.color_code, p_reorder_threshold: -5,
+    });
+    chk(bad.status >= 400, `a negative threshold is refused (HTTP ${bad.status})`);
+  }
 }
 
 // ---------------------------------------------------------------------------

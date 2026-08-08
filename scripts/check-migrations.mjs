@@ -377,6 +377,16 @@ const MIGRATIONS = [
     ],
   },
   {
+    file: '0074_fix_reorder_levels_after_rename',
+    probes: [() => rpc('sm_set_reorder_levels', { p_color_code: 'PROBE-COLOR', p_reorder_threshold: -1 })],
+    note: "same signature as 0046, so this probe only proves the function exists — both the broken upsert and the fix answer it identically, because a negative threshold is refused before either reaches the write. `npm run verify:store` section 1 makes a REAL call, which is what tells them apart (the pre-0074 version returns 42P10).",
+  },
+  {
+    file: '0075_handover_requires_finished_order',
+    probes: [() => rpc('fm_handover_queue')],
+    note: "0075 only changes the BODY of fm_submit_handover and fm_handover_queue at 0071's signatures, so nothing on the REST surface distinguishes them. `npm run verify:store` section 6 proves the guard by calling the RPC against an order that is NOT finished and requiring a refusal.",
+  },
+  {
     file: '0073_fix_grn_queue_join',
     probes: [() => rpc('my_queue_items', { p_queue_key: 'grn_pending' })],
     note: "same signature as 0066/0067 — only the grns join changed, so this probe cannot tell the fixed version from the broken one. It CAN be told apart by data: with at least one pending GRN, the broken version raises 42703 and the fixed one returns rows. `npm run verify:store` section 8 does exactly that.",
