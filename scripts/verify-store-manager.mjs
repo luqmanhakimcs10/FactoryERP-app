@@ -358,9 +358,16 @@ console.log('\n=== 6. Handover: decimal leftovers, On Machine kept separate ==='
      */
     console.log('  ..    no finished order awaiting handover — testing the guard instead');
 
-    const unfinished = await q(
-      'orders?select=id,order_code,status&status=in.(job_card_confirmed,in_production)&limit=1', A.fm);
-    const o = (unfinished.body ?? [])[0];
+    /**
+     * Must be an in-flight order that HAS material issued. Picking any in-flight
+     * order found ALP-00002, which had none, so fm_handover_lines returned
+     * nothing and the guard was never actually called — the section reported a
+     * pass having tested the precondition it exists to test.
+     */
+    const issued = await q(
+      'material_issues?select=order_id,orders(id,order_code,status)' +
+      '&orders.status=in.(job_card_confirmed,in_production,in_finishing)&limit=5', A.fm);
+    const o = (issued.body ?? []).map((m) => m.orders).filter(Boolean)[0];
     if (!o) {
       console.log('  ..    no in-flight order either; the credit path is UNPROVEN in this run');
     } else {

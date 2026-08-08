@@ -398,6 +398,7 @@ const UNDETECTABLE = [
   ['0003b_seed_profiles_by_email', 'alternative to 0003; same end state'],
   ['0004_fix_auth_user_null_tokens', 'repairs auth token columns — invisible unless logins fail'],
   ['0006_masters_factory_id_default', 'a column DEFAULT'],
+  ['0076_audit_type_default_weekly', "a column DEFAULT (stock_audits.audit_type), which REST never reports. Its effect shows in `npm run verify:tenancy` section 31: without it the legacy weekly sm_submit_audit writes rows labelled 'daily', collides with uq_daily_audit_per_day, and the RED-01 ledger trail stops reconstructing."],
   ['0010_order_photos_storage', 'storage bucket + policies (not on the REST surface)'],
   ['0011_not_found_status', 'changes an error code, not the schema'],
   ['0014_backfill_opening_movements', 'a data backfill'],

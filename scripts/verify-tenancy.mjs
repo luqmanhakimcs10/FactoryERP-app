@@ -933,7 +933,12 @@ const EXPECTED_ROLE = {
     const levels = await rpc('sm_set_reorder_levels', AP.sm, {
       p_color_code: 'RED-01', p_reorder_threshold: before + 1, p_reorder_quantity: 500,
     });
-    chk(levels.status === 200 && Number(levels.body?.reorder_threshold) === before + 1,
+    // 0074 made sm_set_reorder_levels a `returns table (...)`, so the response
+    // is a one-row array rather than an object. The change was needed to stop the
+    // function depending on the thread_stock view's composite type, which made
+    // 0068's `drop view` unre-runnable.
+    const levelRow = Array.isArray(levels.body) ? levels.body[0] : levels.body;
+    chk(levels.status === 200 && Number(levelRow?.reorder_threshold) === before + 1,
       `reorder threshold set -> HTTP ${levels.status}`);
 
     // Path 1: sm_submit_audit crosses the threshold. Every real mutation path in
