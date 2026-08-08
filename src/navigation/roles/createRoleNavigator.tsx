@@ -414,6 +414,12 @@ export function createRoleNavigator(role: Role) {
                 own record list as single-column rows — the grid is top level
                 only, matching the Floor Manager's Orders/Machine/Shift/Leave
                 boxes exactly. */}
+            {/* Read-only order detail. Registered for the store manager so the
+                Requests list can open a request's order — without it every
+                history row was inert while still showing a chevron. The screen
+                contains no mutation, and the RLS update policy on `orders` only
+                matches drafts, so read-only is enforced twice over. */}
+            <Stack.Screen name="OrderDetail" component={OrderDetailScreen} options={{ title: 'Order' }} />
             <Stack.Screen name="StorePoSection" component={StorePoSectionScreen} options={{ title: 'PO' }} />
             <Stack.Screen
               name="StoreInventorySection"

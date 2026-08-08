@@ -336,7 +336,17 @@ function InventoryRow({ row, navigation }: { row: InventoryItem; navigation: any
   const low = row.reorder_threshold != null && Number(row.quantity) < Number(row.reorder_threshold);
   return (
     <Pressable
-      onPress={() => navigation.navigate('StockLedger', { colorCode: row.color_code })}
+      // Passes the ITEM, not just its colour. The ledger screen keys off itemId
+      // when present, because a colour alone can now belong to several items.
+      onPress={() =>
+        navigation.navigate('StockLedger', {
+          colorCode: row.color_code,
+          itemId: row.id,
+          itemType: row.item_type,
+          unit: row.unit,
+          quantity: row.quantity,
+        })
+      }
       style={({ pressed }) => [styles.row, pressed && styles.rowPressed]}
       accessibilityRole="button"
     >
@@ -391,24 +401,43 @@ function AuditRow({ row, navigation }: { row: AuditHistoryRow; navigation: any }
 }
 
 function RequestRow({ row, navigation }: { row: MaterialRequestRow; navigation: any }) {
-  // A job-card request the store still owes opens the screen that issues it.
-  // Everything else is history: the store manager has no order-detail route
-  // registered, so making those rows pressable would navigate to nothing.
-  const actionable = row.status === 'pending' && row.origin === 'job_card' && !!row.job_card_id;
+  /**
+   * EVERY row opens something.
+   *
+   * This used to make only a still-owed job-card request pressable and disable
+   * the rest, reasoning that the store manager had no order-detail route. The
+   * result was a list where nothing could be tapped — most requests are either
+   * "material ready in store" (addressed to the floor manager) or already done —
+   * while every row still showed a chevron promising otherwise. A disabled row
+   * that looks tappable is worse than one that plainly is not.
+   *
+   * Two destinations, by what the row actually is:
+   *   still owed by the store  -> IssueDetail, the screen that issues it
+   *   anything else            -> OrderDetail, read-only
+   *
+   * IssueDetail is deliberately NOT used for an already-issued card: it has no
+   * already-done state, so it would render the issue form and the RPC would
+   * refuse with "materials have already been issued" — a dead end.
+   *
+   * OrderDetail is safe to hand this role: it contains no mutation at all, and
+   * the RLS update policy on `orders` only matches drafts anyway.
+   */
+  const owedByStore = row.status === 'pending' && row.origin === 'job_card' && !!row.job_card_id;
   return (
     <Pressable
-      onPress={
-        actionable
-          ? () =>
-              navigation.navigate('IssueDetail', {
-                jobCardId: row.job_card_id,
-                orderCode: row.order_code,
-              })
-          : undefined
+      onPress={() =>
+        owedByStore
+          ? navigation.navigate('IssueDetail', {
+              jobCardId: row.job_card_id,
+              orderCode: row.order_code,
+            })
+          : navigation.navigate('OrderDetail', { orderId: row.order_id })
       }
-      disabled={!actionable}
-      style={({ pressed }) => [styles.row, pressed && actionable && styles.rowPressed]}
-      accessibilityRole={actionable ? 'button' : undefined}
+      style={({ pressed }) => [styles.row, pressed && styles.rowPressed]}
+      accessibilityRole="button"
+      accessibilityLabel={`${row.order_code}, ${row.status}. ${
+        owedByStore ? 'Issue materials' : 'View order'
+      }`}
     >
       <View style={{ flex: 1, gap: 2 }}>
         <View style={styles.rowTop}>

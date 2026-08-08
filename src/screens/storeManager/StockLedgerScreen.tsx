@@ -16,6 +16,7 @@ import { StatusPill } from '../../components/ui/StatusPill';
 import { AppButton } from '../../components/ui/AppButton';
 import { TextField } from '../../components/forms/TextField';
 import { getStockLedger, listThreadStock, setReorderLevels } from '../../api/endpoints/inventory';
+import { getInventoryLedger } from '../../api/endpoints/storeManager';
 import { describeDbError } from '../../utils/errors';
 import { MOVEMENT_LABEL, type MovementType } from '../../models/inventoryTypes';
 import {
@@ -38,14 +39,30 @@ export function StockLedgerScreen() {
   const route = useRoute<any>();
   const queryClient = useQueryClient();
   const colorCode: string = route.params?.colorCode;
+  /**
+   * Since 0068 a colour code can belong to a thread AND a tilla AND a sequin, so
+   * the colour-keyed ledger merges them into one running balance that means
+   * nothing. Callers that know which item they mean pass `itemId`, and this
+   * screen then reads the item-keyed ledger (0081). The thread-stock screen
+   * still passes only a colour, which is safe there because it is thread by
+   * construction.
+   */
+  const itemId: string | undefined = route.params?.itemId;
+  const itemType: string = route.params?.itemType ?? 'thread';
+  const isThread = itemType === 'thread';
+  const unit: string = route.params?.unit ?? 'm';
 
   const { data, isLoading, isError, error } = useQuery({
-    queryKey: ['stockLedger', colorCode],
-    queryFn: () => getStockLedger(colorCode),
+    queryKey: ['stockLedger', itemId ?? colorCode],
+    queryFn: () => (itemId ? getInventoryLedger(itemId) : getStockLedger(colorCode)),
   });
+  // Thread-only: this list is the `thread_stock` view, and the reorder controls
+  // below set thread reorder levels. For any other type there is nothing here to
+  // look up, so it is not asked for.
   const { data: stock } = useQuery({
     queryKey: ['threadStock', colorCode],
     queryFn: () => listThreadStock(colorCode),
+    enabled: isThread,
   });
 
   const current = stock?.find((s) => s.color_code === colorCode);
@@ -79,8 +96,14 @@ export function StockLedgerScreen() {
     <Screen padded={false}>
       <View style={styles.header}>
         <Text style={styles.color}>{colorCode}</Text>
+        {/* Hard-coded "m" was fine while everything was thread. `unit` now comes
+            from the item (cones, pcs, m), and for a non-thread type the
+            thread_stock view has no row at all — so the balance is taken from the
+            param rather than reported as a confident zero. */}
         <Text style={styles.balance}>
-          {Number(current?.quantity_meters ?? 0).toLocaleString()} m in stock
+          {isThread
+            ? `${Number(current?.quantity_meters ?? 0).toLocaleString()} ${unit} in stock`
+            : `${Number(route.params?.quantity ?? 0).toLocaleString()} ${unit} in stock`}
         </Text>
         {/* If this ever reads "does not reconcile", a movement was missed. */}
         <Text style={[styles.reconcile, !reconciles && { color: colors.alert }]}>
@@ -89,6 +112,10 @@ export function StockLedgerScreen() {
             : `Ledger sums to ${sum.toLocaleString()} — does not reconcile`}
         </Text>
 
+        {/* Thread only. `sm_set_reorder_levels` resolves its row by colour AND
+            item_type = 'thread' (0074), so offering this for a tilla or a sequin
+            would silently set the level on the THREAD of the same colour. */}
+        {isThread ? (
         <View style={styles.reorderBox}>
           <Text style={styles.reorderTitle}>Automatic reorder</Text>
           <Text style={styles.reorderHint}>
@@ -114,6 +141,7 @@ export function StockLedgerScreen() {
             }}
           />
         </View>
+        ) : null}
       </View>
 
       {isLoading ? (

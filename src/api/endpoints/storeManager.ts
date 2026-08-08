@@ -12,6 +12,9 @@
  * same transaction as the balance change it explains.
  */
 import { supabase } from '../client';
+// Same row shape as the colour-keyed ledger — 0081 returns stock_ledger's exact
+// column list so both can feed one screen.
+import type { StockLedgerRow } from '../../models/inventoryTypes';
 
 export type ItemType = 'thread' | 'tilla' | 'sequin' | 'bobbin';
 
@@ -173,6 +176,20 @@ export async function addInventory(args: {
   });
   if (error) throw error;
   return data as InventoryItem;
+}
+
+/**
+ * Movement history for ONE item.
+ *
+ * Use this, not `getStockLedger(colorCode)`, for anything that is not known to be
+ * thread: since 0068 a colour code can belong to a thread AND a tilla AND a
+ * sequin, and the colour-keyed version merges all of them into one nonsensical
+ * running balance (see 0081).
+ */
+export async function getInventoryLedger(itemId: string): Promise<StockLedgerRow[]> {
+  const { data, error } = await supabase.rpc('inventory_ledger', { p_item_id: itemId });
+  if (error) throw error;
+  return (data ?? []) as StockLedgerRow[];
 }
 
 export async function listMountedItems(machineId: string): Promise<MountedItem[]> {
