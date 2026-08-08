@@ -48,6 +48,12 @@ import { AddInventoryScreen } from '../../screens/storeManager/AddInventoryScree
 import { StoreNewPoScreen } from '../../screens/storeManager/StoreNewPoScreen';
 import { DailyAuditScreen } from '../../screens/storeManager/DailyAuditScreen';
 import { AuditDetailScreen } from '../../screens/storeManager/AuditDetailScreen';
+import {
+  StorePoSectionScreen,
+  StoreInventorySectionScreen,
+  StoreAuditSectionScreen,
+  StoreRequestsSectionScreen,
+} from '../../screens/storeManager/StoreSectionScreens';
 import { HandoverToStoreScreen } from '../../screens/floorManager/HandoverToStoreScreen';
 import { OpeningStockScreen } from '../../screens/storeManager/OpeningStockScreen';
 import { MachineListScreen } from '../../screens/floorManager/MachineListScreen';
@@ -404,6 +410,26 @@ export function createRoleNavigator(role: Role) {
             {/* The PO tab opens procurement's existing PO screen rather than a
                 store-manager copy of it. Registered here because that screen
                 previously belonged to procurement and the accountant only. */}
+            {/* The four sections behind the dashboard's 2x2 grid. Each holds its
+                own record list as single-column rows — the grid is top level
+                only, matching the Floor Manager's Orders/Machine/Shift/Leave
+                boxes exactly. */}
+            <Stack.Screen name="StorePoSection" component={StorePoSectionScreen} options={{ title: 'PO' }} />
+            <Stack.Screen
+              name="StoreInventorySection"
+              component={StoreInventorySectionScreen}
+              options={{ title: 'Inventory' }}
+            />
+            <Stack.Screen
+              name="StoreAuditSection"
+              component={StoreAuditSectionScreen}
+              options={{ title: 'Audit' }}
+            />
+            <Stack.Screen
+              name="StoreRequestsSection"
+              component={StoreRequestsSectionScreen}
+              options={{ title: 'Requests' }}
+            />
             <Stack.Screen name="PoDetail" component={PoDetailScreen} options={{ title: 'Purchase order' }} />
           </>
         ) : null}
