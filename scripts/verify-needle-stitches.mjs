@@ -173,10 +173,16 @@ console.log('\n=== 3. Stitches save, and reach the Job Card table ===');
     `needle 2: ${SHORT} at ${SHORT_STITCHES.toLocaleString()} stitches`);
 
   // The Job Card detail table reads job_card_lines directly — this is the same
-  // data it renders, so a non-null value here IS the column no longer showing 0.
+  // data it renders, so a non-zero value here IS the column no longer showing 0.
+  //
+  // NOT `lines.length === 2`. fm_generate_job_card already made a line for the
+  // sheet's colour, and fm_delete_job_card_line refuses to remove the last one
+  // ("a job card needs at least one needle line"), so that line survives the
+  // clear-out above and the two added here sit alongside it. Three lines is
+  // correct; asserting two was the test being wrong about the app.
   const lines = await get('floor', `job_card_lines?job_card_id=eq.${card.id}&select=needle_number,thread_color_code,stitch_count&order=needle_number`);
-  chk(lines.length === 2 && lines.every((l) => l.stitch_count > 0),
-    `the table's Stitches column has real values: ${lines.map((l) => l.stitch_count).join(', ')}`);
+  chk(lines.length >= 2 && lines.every((l) => Number(l.stitch_count) > 0),
+    `${lines.length} line(s), every Stitches value real: ${lines.map((l) => l.stitch_count).join(', ')}`);
 }
 
 // ---------------------------------------------------------------------------
@@ -187,13 +193,34 @@ console.log('\n=== 4. Per-colour requirement, computed per needle ===');
   const rows = req.body ?? [];
   const byColor = Object.fromEntries(rows.map((r) => [r.color_code, r]));
 
-  const expRich = Math.ceil((RICH_STITCHES * REPEATS) / PER_CONE);
-  const expShort = Math.ceil((SHORT_STITCHES * REPEATS) / PER_CONE);
+  /**
+   * Expected totals are derived from the lines that ACTUALLY exist, not from the
+   * two this script added.
+   *
+   * A colour can legitimately sit on several needles — RED-01 is on the line
+   * fm_generate_job_card made AND the one added above — and the requirement is
+   * the SUM across them, which is correct: two needles running one colour both
+   * consume it. Hardcoding one needle's figure per colour asserted a rule the app
+   * does not have and never should.
+   */
+  const realLines = await get('floor',
+    `job_card_lines?job_card_id=eq.${card.id}&select=thread_color_code,stitch_count`);
+  const expected = {};
+  for (const l of realLines) {
+    expected[l.thread_color_code] =
+      (expected[l.thread_color_code] ?? 0) + Number(l.stitch_count) * REPEATS;
+  }
+  const cones = (st) => Math.ceil(st / PER_CONE);
+  const expRich = cones(expected[RICH] ?? 0);
+  const expShort = cones(expected[SHORT] ?? 0);
 
-  chk(Number(byColor[RICH]?.total_stitches) === RICH_STITCHES * REPEATS,
-    `${RICH}: ${RICH_STITCHES.toLocaleString()} x ${REPEATS} repeats = ${(RICH_STITCHES * REPEATS).toLocaleString()} stitches`);
-  chk(Number(byColor[SHORT]?.total_stitches) === SHORT_STITCHES * REPEATS,
-    `${SHORT}: ${SHORT_STITCHES.toLocaleString()} x ${REPEATS} repeats = ${(SHORT_STITCHES * REPEATS).toLocaleString()} stitches`);
+  for (const c of [RICH, SHORT]) {
+    const needles = realLines.filter((l) => l.thread_color_code === c);
+    chk(Number(byColor[c]?.total_stitches) === expected[c],
+      `${c}: ${needles.map((l) => l.stitch_count).join(' + ')} x ${REPEATS} repeats` +
+      ` = ${expected[c].toLocaleString()} stitches` +
+      (needles.length > 1 ? ` (summed across ${needles.length} needles)` : ''));
+  }
 
   chk(byColor[RICH]?.cones_needed === expRich, `${RICH} needs ${expRich} cone(s) at 350,000/cone`);
   chk(byColor[SHORT]?.cones_needed === expShort, `${SHORT} needs ${expShort} cone(s) at 350,000/cone`);
@@ -223,7 +250,13 @@ console.log('\n=== 5. Asking for material orders the exact shortfall ===');
 
   const items = await get('floor', `po_items?purchase_order_id=eq.${pos[0]?.id}&select=color_code,quantity_meters`);
   const byColor = Object.fromEntries(items.map((i) => [i.color_code, Number(i.quantity_meters)]));
-  const expShort = Math.ceil((SHORT_STITCHES * REPEATS) / PER_CONE) - Math.floor(shortStock);
+  // Derived the same way section 4 does, so the two cannot disagree.
+  const shortLines = await get('floor',
+    `job_card_lines?job_card_id=eq.${card.id}&select=thread_color_code,stitch_count`);
+  const shortStitches = shortLines
+    .filter((l) => l.thread_color_code === SHORT)
+    .reduce((n, l) => n + Number(l.stitch_count) * REPEATS, 0);
+  const expShort = Math.ceil(shortStitches / PER_CONE) - Math.floor(shortStock);
 
   chk(byColor[SHORT] === expShort,
     `the PO asks for ${byColor[SHORT]} cone(s) of ${SHORT} (expected ${expShort})`);
