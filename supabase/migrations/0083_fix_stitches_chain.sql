@@ -44,6 +44,30 @@
 -- =============================================================================
 
 -- ---------------------------------------------------------------------------
+-- 0. A sanity bound on stitches per repeat — FIRST, because everything below
+--    multiplies by it.
+--
+-- This database holds 25,555,484,848 in one job card and 555,555,886 in another,
+-- neither of which any validation caught. `job_card_lines.stitch_count` is an
+-- `int`, so 25.5 billion x 2 repeats is 51 billion and overflows it — the first
+-- draft of this migration died on exactly that, which is how the values came to
+-- light.
+--
+-- `not valid` deliberately: it stops NEW nonsense without failing the migration
+-- on the two rows already there. Those are reported at the end instead, because
+-- silently rewriting a number a person typed is worse than telling them it is
+-- wrong. A card carrying one cannot be re-saved until it is corrected, which is
+-- the right kind of friction.
+--
+-- 10,000,000 stitches per repeat is the bound: roughly 28 cones for ONE repeat
+-- at 350,000/cone, already far beyond any real garment.
+-- ---------------------------------------------------------------------------
+alter table public.job_cards drop constraint if exists job_cards_stitches_sane_chk;
+alter table public.job_cards add constraint job_cards_stitches_sane_chk
+  check (stitches_per_repeat is null or stitches_per_repeat between 0 and 10000000)
+  not valid;
+
+-- ---------------------------------------------------------------------------
 -- 1. Needle lines are born with real stitches.
 --
 -- Regenerated from 0037's body (the current definition) with the stitch
@@ -94,16 +118,23 @@ begin
     select
       col.code as color_code,
       min(s.sheet_number) as first_sheet,
-      sum(
-        (
-          -- THE FIX. The sheet's own figure when it has one; otherwise the Job
-          -- Card Builder's "stitches per repeat", which is the field the floor
-          -- manager actually fills in and the one that was being ignored.
-          case when coalesce(s.stitch_count, 0) > 0
-               then s.stitch_count::numeric
-               else v_per_rep::numeric
-          end * s.repeats_count
-        ) / greatest(coalesce(array_length(s.thread_color_codes,1),0),1)
+      -- least(...) before the ::int cast. stitch_count is an int, and without
+      -- the clamp an absurd stitches_per_repeat raises 22003 and takes the whole
+      -- job card generation down. The constraint above stops new nonsense; this
+      -- keeps the function from crashing on nonsense already stored.
+      least(
+        sum(
+          (
+            -- THE FIX. The sheet's own figure when it has one; otherwise the Job
+            -- Card Builder's "stitches per repeat", which is the field the floor
+            -- manager actually fills in and the one that was being ignored.
+            case when coalesce(s.stitch_count, 0) > 0
+                 then s.stitch_count::numeric
+                 else v_per_rep::numeric
+            end * s.repeats_count
+          ) / greatest(coalesce(array_length(s.thread_color_codes,1),0),1)
+        ),
+        2000000000::numeric
       )::int as stitches
     from public.sheets s
     cross join lateral unnest(s.thread_color_codes) as col(code)
@@ -121,37 +152,61 @@ end $$;
 
 grant execute on function public.fm_generate_job_card(uuid) to authenticated;
 
--- Repair the lines already sitting at zero, using the same rule. Only touches
--- lines that are 0 or null AND whose job card has a real per-repeat figure, so a
--- deliberately-entered value is never overwritten.
+-- Repair the lines already sitting at zero, using the same rule.
+--
+-- Only touches lines that are 0 or null AND whose job card has a real per-repeat
+-- figure, so a deliberately-entered value is never overwritten. Rows whose
+-- computed value will not fit in an `int` are SKIPPED rather than clamped: a
+-- clamped 2,000,000,000 would be a number nobody entered, sitting in a field the
+-- purchase-order calculation trusts. They are named in a notice instead.
 do $$
-declare n int;
+declare
+  n_fixed   int := 0;
+  n_skipped int := 0;
+  bad       text;
 begin
+  with candidate as (
+    select jcl.id,
+           ceil(
+             (jc.stitches_per_repeat::numeric * coalesce(sh.total_repeats, 0))
+             / greatest(cnt.colour_count, 1)
+           ) as stitches
+      from public.job_card_lines jcl
+      join public.job_cards jc on jc.id = jcl.job_card_id
+      left join lateral (
+        select sum(s.repeats_count) as total_repeats
+          from public.sheets s where s.order_id = jc.order_id
+      ) sh on true
+      join lateral (
+        select count(*) as colour_count
+          from public.job_card_lines x where x.job_card_id = jc.id
+      ) cnt on true
+     where coalesce(jcl.stitch_count, 0) = 0
+       and coalesce(jc.stitches_per_repeat, 0) > 0
+  )
   update public.job_card_lines jcl
-     set stitch_count = sub.stitches
-    from (
-      select jcl2.id,
-             ceil(
-               (jc.stitches_per_repeat::numeric * coalesce(sh.total_repeats, 0))
-               / greatest(sub2.colour_count, 1)
-             )::int as stitches
-        from public.job_card_lines jcl2
-        join public.job_cards jc on jc.id = jcl2.job_card_id
-        left join lateral (
-          select sum(s.repeats_count) as total_repeats
-            from public.sheets s where s.order_id = jc.order_id
-        ) sh on true
-        join lateral (
-          select count(*) as colour_count
-            from public.job_card_lines x where x.job_card_id = jc.id
-        ) sub2 on true
-       where coalesce(jcl2.stitch_count, 0) = 0
-         and coalesce(jc.stitches_per_repeat, 0) > 0
-    ) sub
-   where jcl.id = sub.id;
-  get diagnostics n = row_count;
-  if n > 0 then
-    raise notice 'filled % needle line(s) that were stranded at zero', n;
+     set stitch_count = c.stitches::int
+    from candidate c
+   where jcl.id = c.id
+     -- The guard the first draft was missing.
+     and c.stitches between 1 and 2000000000;
+  get diagnostics n_fixed = row_count;
+
+  select count(*), string_agg(distinct jc.stitches_per_repeat::text, ', ')
+    into n_skipped, bad
+    from public.job_card_lines jcl
+    join public.job_cards jc on jc.id = jcl.job_card_id
+   where coalesce(jcl.stitch_count, 0) = 0
+     and coalesce(jc.stitches_per_repeat, 0) > 10000000;
+
+  if n_fixed > 0 then
+    raise notice 'filled % needle line(s) that were stranded at zero', n_fixed;
+  end if;
+  if n_skipped > 0 then
+    raise notice
+      'SKIPPED % line(s): their job card holds an impossible stitches_per_repeat (%). '
+      'Correct those job cards by hand — the value was never entered deliberately.',
+      n_skipped, bad;
   end if;
 end $$;
 
@@ -349,13 +404,12 @@ $$;
 grant execute on function public.owner_approvals_queue() to authenticated;
 
 -- ---------------------------------------------------------------------------
--- 5. A sanity bound on stitches per repeat.
---
--- This database currently holds 25,555,484,848 in one job card — a fat-fingered
--- entry that no validation caught. At 350,000 stitches per cone that is 73,016
--- cones for a single repeat, and it would flow straight into a purchase order.
+-- Job cards carrying an impossible figure. Fix or delete these by hand; the
+-- constraint above stops new ones but deliberately leaves existing rows alone.
 -- ---------------------------------------------------------------------------
-alter table public.job_cards drop constraint if exists job_cards_stitches_sane_chk;
-alter table public.job_cards add constraint job_cards_stitches_sane_chk
-  check (stitches_per_repeat is null or stitches_per_repeat between 0 and 10000000)
-  not valid;
+select jc.id, o.order_code, jc.status, jc.stitches_per_repeat,
+       'above the 10,000,000 bound — correct this card' as note
+  from public.job_cards jc
+  join public.orders o on o.id = jc.order_id
+ where coalesce(jc.stitches_per_repeat, 0) > 10000000
+ order by jc.stitches_per_repeat desc;
