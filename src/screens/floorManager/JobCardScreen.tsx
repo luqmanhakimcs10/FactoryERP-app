@@ -50,6 +50,7 @@ import {
   generateJobCard,
   markVendorInformed,
   askForMaterial,
+  getColorRequirements,
 } from '../../api/endpoints/orders';
 import { describeDbError } from '../../utils/errors';
 import { shareJobCardPdf } from '../../utils/jobCardExport';
@@ -158,6 +159,16 @@ export function JobCardScreen() {
   // Total planned repeats (from sheets), not just how many have been coded so
   // far — matches the same total-stitches basis used on the Job Card Builder.
   const repeatCount = (sheets ?? []).reduce((sum, s) => sum + (s.repeats_count ?? 0), 0);
+  // Per-colour requirement from the real per-needle counts (0082). Empty until
+  // needle lines exist, which is why it renders conditionally rather than
+  // showing a table of zeroes.
+  const { data: colorReqData } = useQuery({
+    queryKey: ['colorRequirements', orderId],
+    queryFn: () => getColorRequirements(orderId),
+    enabled: !!orderId,
+  });
+  const colorReq = colorReqData ?? [];
+
   const totalStitches =
     card?.stitches_per_repeat && repeatCount ? Math.round(card.stitches_per_repeat * repeatCount) : null;
   const busy =
@@ -262,6 +273,46 @@ export function JobCardScreen() {
                       </Text>
                     </View>
                   ))}
+                </View>
+              ) : null}
+
+              {/* What those stitch counts actually MEAN for thread.
+                  The needle table above is the input; this is the consequence,
+                  and putting them on one screen is what makes a wrong stitch
+                  figure noticeable before it becomes a wrong purchase order. */}
+              {colorReq.length ? (
+                <View style={styles.table}>
+                  <View style={styles.tableHeadRow}>
+                    <Text style={[styles.th, styles.colColor]}>Colour</Text>
+                    <Text style={[styles.th, styles.colStitch]}>Stitches</Text>
+                    <Text style={[styles.th, styles.colStitch]}>Cones</Text>
+                    <Text style={[styles.th, styles.colStitch]}>Short</Text>
+                  </View>
+                  {colorReq.map((c) => (
+                    <View key={c.color_code} style={styles.tableRow}>
+                      <Text style={[styles.td, styles.mono, styles.colColor]}>{c.color_code}</Text>
+                      <Text style={[styles.td, styles.mono, styles.colStitch]}>
+                        {c.stitches_known ? Number(c.total_stitches).toLocaleString() : '—'}
+                      </Text>
+                      <Text style={[styles.td, styles.mono, styles.colStitch]}>
+                        {c.stitches_known ? c.cones_needed : '—'}
+                      </Text>
+                      <Text
+                        style={[
+                          styles.td, styles.mono, styles.colStitch,
+                          c.cones_short > 0 && { color: colors.alert },
+                        ]}
+                      >
+                        {c.stitches_known ? (c.cones_short > 0 ? c.cones_short : '0') : '?'}
+                      </Text>
+                    </View>
+                  ))}
+                  <Text style={styles.reqNote}>
+                    350,000 stitches per cone.{' '}
+                    {colorReq.some((c) => !c.stitches_known)
+                      ? 'A dash means that colour has a needle with no stitch count entered yet.'
+                      : 'Shortfalls are ordered automatically when material is requested.'}
+                  </Text>
                 </View>
               ) : null}
 
@@ -422,6 +473,7 @@ function Section({ title, children }: { title: string; children: React.ReactNode
 }
 
 const styles = StyleSheet.create({
+  reqNote: { padding: spacing.md, fontSize: fontSize.caption, color: colors.slate },
   bannerGap: { marginBottom: spacing.lg },
   content: { padding: spacing.xl },
   head: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: spacing.sm },

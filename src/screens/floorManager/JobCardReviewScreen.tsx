@@ -47,6 +47,9 @@ export function JobCardReviewScreen() {
 
   const [colorEdits, setColorEdits] = useState<Record<string, string>>({});
   const [newColor, setNewColor] = useState('');
+  const [newStitches, setNewStitches] = useState('');
+  // Keyed by line id, like colorEdits — an unsaved stitch figure per line.
+  const [stitchEdits, setStitchEdits] = useState<Record<string, string>>({});
   const [adding, setAdding] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [savingLineId, setSavingLineId] = useState<string | null>(null);
@@ -66,11 +69,18 @@ export function JobCardReviewScreen() {
   }
 
   const updateLineMutation = useMutation({
-    mutationFn: ({ lineId, needle, color }: { lineId: string; needle: number; color: string }) =>
-      updateJobCardLine(jobCard!.card!.id, lineId, needle, color),
+    mutationFn: ({
+      lineId, needle, color, stitches,
+    }: { lineId: string; needle: number; color: string; stitches: number }) =>
+      updateJobCardLine(jobCard!.card!.id, lineId, needle, color, stitches),
     onMutate: ({ lineId }) => setSavingLineId(lineId),
     onSuccess: (_data, { lineId }) => {
       setColorEdits((prev) => {
+        const next = { ...prev };
+        delete next[lineId];
+        return next;
+      });
+      setStitchEdits((prev) => {
         const next = { ...prev };
         delete next[lineId];
         return next;
@@ -89,6 +99,7 @@ export function JobCardReviewScreen() {
       // colour edits are now keyed to needles that have shifted. Drop them
       // rather than let a stale edit save against the wrong needle.
       setColorEdits({});
+      setStitchEdits({});
       invalidate();
     },
     onError: (e: unknown) => setError(describeDbError(e, 'Job card')),
@@ -96,9 +107,11 @@ export function JobCardReviewScreen() {
   });
 
   const addLineMutation = useMutation({
-    mutationFn: (color: string) => addJobCardLine(jobCard!.card!.id, color),
+    mutationFn: ({ color, stitches }: { color: string; stitches: number }) =>
+      addJobCardLine(jobCard!.card!.id, color, stitches),
     onSuccess: () => {
       setNewColor('');
+      setNewStitches('');
       setAdding(false);
       invalidate();
     },
@@ -139,7 +152,12 @@ export function JobCardReviewScreen() {
 
         {lines.map((l) => {
           const color = colorEdits[l.id] ?? l.thread_color_code;
-          const dirty = color !== l.thread_color_code;
+          // '' rather than '0' for a line that predates 0082 — those were never
+          // captured, and showing 0 would read as "this needle sews nothing".
+          const stitches = stitchEdits[l.id] ?? (l.stitch_count != null ? String(l.stitch_count) : '');
+          const dirty =
+            color !== l.thread_color_code ||
+            stitches !== (l.stitch_count != null ? String(l.stitch_count) : '');
           return (
             <View key={l.id} style={styles.row}>
               <View style={styles.rowHead}>
@@ -174,6 +192,18 @@ export function JobCardReviewScreen() {
                 onChangeText={(v) => setColorEdits((prev) => ({ ...prev, [l.id]: v }))}
                 mono
               />
+              {/* This needle's OWN stitch count — not the order-level "stitches
+                  per repeat". Different needles carry different loads in one
+                  design, and this is the number the per-colour thread
+                  requirement is computed from (0082). */}
+              <TextField
+                label="Stitches"
+                value={stitches}
+                onChangeText={(v) => setStitchEdits((prev) => ({ ...prev, [l.id]: v }))}
+                numeric
+                required
+                mono
+              />
               {dirty ? (
                 <AppButton
                   title="Save"
@@ -186,10 +216,16 @@ export function JobCardReviewScreen() {
                       setError('A thread colour is required.');
                       return;
                     }
+                    const n = Number(stitches);
+                    if (!stitches.trim() || !Number.isFinite(n) || n <= 0) {
+                      setError('Stitches for this needle must be greater than zero.');
+                      return;
+                    }
                     updateLineMutation.mutate({
                       lineId: l.id,
                       needle: l.needle_number,
                       color: color.trim(),
+                      stitches: Math.round(n),
                     });
                   }}
                   style={styles.saveBtn}
@@ -213,6 +249,15 @@ export function JobCardReviewScreen() {
               placeholder="e.g. RED-01"
               mono
             />
+            <TextField
+              label="Stitches"
+              value={newStitches}
+              onChangeText={setNewStitches}
+              placeholder="e.g. 12000"
+              numeric
+              required
+              mono
+            />
             <View style={styles.addActions}>
               <AppButton
                 title="Cancel"
@@ -221,6 +266,7 @@ export function JobCardReviewScreen() {
                 onPress={() => {
                   setError(null);
                   setNewColor('');
+                  setNewStitches('');
                   setAdding(false);
                 }}
                 style={styles.saveBtn}
@@ -236,7 +282,12 @@ export function JobCardReviewScreen() {
                     setError('A thread colour is required.');
                     return;
                   }
-                  addLineMutation.mutate(newColor.trim());
+                  const n = Number(newStitches);
+                  if (!newStitches.trim() || !Number.isFinite(n) || n <= 0) {
+                    setError('Stitches for this needle must be greater than zero.');
+                    return;
+                  }
+                  addLineMutation.mutate({ color: newColor.trim(), stitches: Math.round(n) });
                 }}
                 style={styles.saveBtn}
               />

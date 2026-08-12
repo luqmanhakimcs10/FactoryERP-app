@@ -366,13 +366,15 @@ export async function updateJobCardLine(
   jobCardId: string,
   lineId: string,
   needleNumber: number,
-  threadColorCode: string
+  threadColorCode: string,
+  stitchCount: number
 ): Promise<JobCardLine> {
   const { data, error } = await supabase.rpc('fm_update_job_card_line', {
     p_job_card_id: jobCardId,
     p_line_id: lineId,
     p_needle_number: needleNumber,
     p_thread_color_code: threadColorCode,
+    p_stitch_count: stitchCount,
   });
   if (error) throw error;
   return data as JobCardLine;
@@ -415,14 +417,40 @@ export async function deleteJobCardLine(jobCardId: string, lineId: string): Prom
  */
 export async function addJobCardLine(
   jobCardId: string,
-  threadColorCode: string
+  threadColorCode: string,
+  stitchCount: number
 ): Promise<JobCardLine> {
   const { data, error } = await supabase.rpc('fm_add_job_card_line', {
     p_job_card_id: jobCardId,
     p_thread_color_code: threadColorCode,
+    p_stitch_count: stitchCount,
   });
   if (error) throw error;
   return data as JobCardLine;
+}
+
+/**
+ * Per-colour thread requirement from real per-needle stitch counts (0082).
+ *
+ * Only meaningful once the job card has needle lines. Before that, the estimate
+ * submit_order made from sheet-level figures is all that exists — the needle
+ * data is created three steps after that check runs.
+ */
+export interface ColorRequirement {
+  color_code: string;
+  total_stitches: number;
+  cones_needed: number;
+  cones_available: number;
+  cones_short: number;
+  stitches_known: boolean;
+}
+
+export async function getColorRequirements(orderId: string): Promise<ColorRequirement[]> {
+  const { data, error } = await supabase.rpc('order_color_requirements', {
+    p_order_id: orderId,
+  });
+  if (error) throw error;
+  return (data ?? []) as ColorRequirement[];
 }
 
 export async function askForMaterial(orderId: string): Promise<JobCard> {

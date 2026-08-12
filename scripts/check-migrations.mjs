@@ -407,6 +407,14 @@ const MIGRATIONS = [
     probes: [() => rpc('inventory_ledger', { p_item_id: NIL })],
   },
   {
+    file: '0082_per_needle_stitches_and_color_requirements',
+    probes: [
+      () => rpc('order_color_requirements', { p_order_id: NIL }),
+      // The 3-arg form only exists after 0082; the 2-arg one is dropped.
+      () => rpc('fm_add_job_card_line', { p_job_card_id: NIL, p_thread_color_code: 'PROBE', p_stitch_count: 0 }),
+    ],
+  },
+  {
     file: '0073_fix_grn_queue_join',
     probes: [() => rpc('my_queue_items', { p_queue_key: 'grn_pending' })],
     note: "same signature as 0066/0067 — only the grns join changed, so this probe cannot tell the fixed version from the broken one. It CAN be told apart by data: with at least one pending GRN, the broken version raises 42703 and the fixed one returns rows. `npm run verify:store` section 8 does exactly that.",
