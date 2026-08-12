@@ -193,10 +193,23 @@ console.log('\n=== 2. Sufficient stock -> Request; shortfall -> PO ===');
       (r.origin === 'auto_stock_ready') === (r.directed_to === 'floor_manager')),
     'auto requests go to the floor manager, job-card requests to the store');
 
-  // The backfill must not have claimed every historic request is still open.
+  /**
+   * The backfill must not have claimed every historic request is still open.
+   *
+   * But "all pending" is a legitimate state — on a freshly wiped database nothing
+   * has been issued yet, so there is nothing that COULD be completed. The check
+   * is therefore conditional on an issue existing: if material has gone out, at
+   * least one request must reflect it. Asserting unconditionally made the suite
+   * fail for having clean data.
+   */
   const done = rr.filter((r) => r.status !== 'pending').length;
-  chk(rr.length === 0 || done > 0,
-    `${done} of ${rr.length} requests are already issued or completed (history, not a fresh queue)`);
+  const anyIssued = ((await q('material_issues?select=id&limit=1', A.sm)).body ?? []).length > 0;
+  if (!anyIssued) {
+    ok(`all ${rr.length} request(s) pending — nothing has been issued yet, so nothing to close`);
+  } else {
+    chk(done > 0,
+      `${done} of ${rr.length} requests are already issued or completed (history, not a fresh queue)`);
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -417,8 +430,13 @@ console.log('\n=== 6. Handover: decimal leftovers, On Machine kept separate ==='
         });
         chk(bad.status >= 400,
           `handing back for ${o.order_code} (${o.status}) is refused (HTTP ${bad.status})`);
-        chk(String(bad.body?.message ?? '').includes('finished'),
-          `and the reason names the real precondition: "${bad.body?.message ?? ''}"`);
+        // 0078 rewrote this message when the gate moved from the order's status
+        // label to the repeats ("once every piece has left the floor"). The
+        // assertion still looked for the word "finished" from the 0075 wording,
+        // so a correct refusal failed. Matching on the CONCEPT, not one word.
+        const why = String(bad.body?.message ?? '');
+        chk(/left the floor|finished/i.test(why),
+          `and the reason names the real precondition: "${why}"`);
       } else {
         console.log(`  ..    ${o.order_code} has no issued material; nothing to attempt`);
       }

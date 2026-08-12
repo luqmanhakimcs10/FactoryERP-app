@@ -54,6 +54,13 @@ const ROUTES = {
   fm_final_qa:       (i) => ['FinalQaDetail', i.order_id],
   fm_shift_close:    (i) => ['ShiftClose', i.secondary_id],
   fm_leave:          () => ['LeaveBox', 'n/a'],
+  // 0080's three. The mirror going stale is what this suite is FOR — it failed
+  // on fm_material_ready, correctly, because taskQueues.ts had the route and
+  // this copy did not. Adding a queue to SQL without a destination must fail
+  // here, so the copy has to be kept in step.
+  fm_store_handover: (i) => ['HandoverToStore', i.order_id],
+  fm_material_ready: () => ['(inline)', 'n/a'],
+  sm_audit_today:    () => ['DailyAudit', 'n/a'],
   material_requests: (i) => ['IssueDetail', i.secondary_id],
   grn_pending:       (i) => ['GrnDetail', i.secondary_id],
   qa_inspection:     (i) => (i.status === 'awaiting_cloth_inspection' ? ['ClothInspection', i.order_id] : ['OrderQa', i.order_id]),

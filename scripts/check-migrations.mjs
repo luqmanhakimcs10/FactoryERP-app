@@ -208,7 +208,13 @@ const MIGRATIONS = [
   {
     file: '0037_fm_job_card_line_edit',
     probes: [
-      () => rpc('fm_update_job_card_line', { p_job_card_id: NIL, p_line_id: NIL, p_needle_number: 1, p_thread_color_code: 'X' }),
+      // 5-arg since 0082 added the required p_stitch_count and DROPPED the 4-arg
+      // form. Probing the old shape reported 0037 as unapplied forever — the
+      // checker crying wolf about a migration that is fine.
+      () => rpc('fm_update_job_card_line', {
+        p_job_card_id: NIL, p_line_id: NIL, p_needle_number: 1,
+        p_thread_color_code: 'X', p_stitch_count: 1,
+      }),
     ],
   },
   {
@@ -310,7 +316,8 @@ const MIGRATIONS = [
   },
   {
     file: '0053_job_card_add_needle_line',
-    probes: [() => rpc('fm_add_job_card_line', { p_job_card_id: NIL, p_thread_color_code: 'PROBE' })],
+    // 3-arg since 0082; the 2-arg form this used to probe is deliberately gone.
+    probes: [() => rpc('fm_add_job_card_line', { p_job_card_id: NIL, p_thread_color_code: 'PROBE', p_stitch_count: 1 })],
     note: "0053 also rewrites fm_delete_job_card_line's body (it now renumbers the remaining lines) at the SAME signature as 0048, so no probe can tell those two apart. `npm run walk:lifecycle` proves the renumbering is live.",
   },
   {

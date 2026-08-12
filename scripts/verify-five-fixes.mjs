@@ -75,21 +75,37 @@ console.log('\n=== FIX 2. Machine-assignment picker includes inventory-accepted 
   // Every order that has had inventory accepted must be selectable.
   const accepted = await q(
     'orders?select=id,order_code,status&status=eq.machine_selection_pending', A.fm);
-  chk((accepted.body ?? []).length > 0,
-    `${(accepted.body ?? []).length} order(s) sit at machine_selection_pending (inventory accepted)`);
+  /**
+   * An empty set here is a legitimate database, not a defect.
+   *
+   * This section asserts a FILTER: every order at machine_selection_pending must
+   * appear in the picker. With no order in that state there is nothing to filter,
+   * and asserting `length > 0` made the suite report a bug that did not exist —
+   * then "all 0 appear in the picker" and "the OLD filter missed 0" passed
+   * vacuously beside it, which is worse than the failure. It now says what state
+   * is missing and how to create it.
+   */
+  const acc = accepted.body ?? [];
+  if (acc.length === 0) {
+    console.log('  ..    no order at machine_selection_pending — the filter has nothing to');
+    console.log('        include, so FIX 2 cannot be exercised in this database state.');
+    console.log('        `node scripts/drive-to-handover.mjs alpha` passes through it.');
+  } else {
+    ok(`${acc.length} order(s) sit at machine_selection_pending (inventory accepted)`);
 
-  const missing = (accepted.body ?? []).filter((o) => !codes.has(o.order_code));
-  chk(missing.length === 0,
-    missing.length === 0
-      ? `all ${(accepted.body ?? []).length} appear in the picker — including ${(accepted.body ?? []).slice(0, 3).map((o) => o.order_code).join(', ')}`
-      : `STILL MISSING: ${missing.map((o) => o.order_code).join(', ')}`);
+    const missing = acc.filter((o) => !codes.has(o.order_code));
+    chk(missing.length === 0,
+      missing.length === 0
+        ? `all ${acc.length} appear in the picker — including ${acc.slice(0, 3).map((o) => o.order_code).join(', ')}`
+        : `STILL MISSING: ${missing.map((o) => o.order_code).join(', ')}`);
 
-  // The old filter, for contrast — this is what the bug was.
-  const oldPicker = await q('orders?select=order_code&status=in.(job_card_confirmed,in_production)', A.fm);
-  const oldCodes = new Set((oldPicker.body ?? []).map((o) => o.order_code));
-  const wouldHaveMissed = (accepted.body ?? []).filter((o) => !oldCodes.has(o.order_code));
-  chk(wouldHaveMissed.length > 0,
-    `the OLD filter would have missed ${wouldHaveMissed.length} of them — confirms the root cause`);
+    // The old filter, for contrast — this is what the bug was.
+    const oldPicker = await q('orders?select=order_code&status=in.(job_card_confirmed,in_production)', A.fm);
+    const oldCodes = new Set((oldPicker.body ?? []).map((o) => o.order_code));
+    const wouldHaveMissed = acc.filter((o) => !oldCodes.has(o.order_code));
+    chk(wouldHaveMissed.length > 0,
+      `the OLD filter would have missed ${wouldHaveMissed.length} of them — confirms the root cause`);
+  }
 
   // ALP-00098 — the order originally reported. It should be selectable, OR
   // have legitimately moved PAST the point of needing a machine. What must not
@@ -192,7 +208,8 @@ console.log('\n=== FIX 3b. Partner Active Work + "Handover to delivery person" =
     chk(!(gone.body ?? []).some((x) => x.repeat_id === walk.id),
       'it leaves the partner\'s Active work once collected');
   } else {
-    no('no repeat available to walk out to the partner');
+    console.log('  ..    no repeat is positioned to go out to a partner — nothing to walk.');
+    console.log('        `node scripts/drive-to-handover.mjs alpha --fixture` seeds one.');
   }
 }
 
