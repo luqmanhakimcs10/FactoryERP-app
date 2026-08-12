@@ -37,10 +37,20 @@
 --
 -- BUG 5: THE APPROVALS INBOX NEVER SHOWED POs
 -- -------------------------------------------
--- `owner_approvals_queue` unions expenses and damage records. Purchase orders
--- sitting at `awaiting_approval` were never in it, so a PO could show "Awaiting
--- Owner Approval" on its own screen while the owner's inbox showed nothing of
--- it. Not a linkage bug — the query simply never asked.
+-- `owner_approvals_queue` unions expenses, damage records and bonus-slab
+-- proposals. Purchase orders sitting at `awaiting_approval` were never in it,
+-- so a PO could show "Awaiting Owner Approval" on its own screen while the
+-- owner's inbox showed nothing of it. Not a linkage bug — the query simply
+-- never asked.
+--
+-- The first draft of this section was REWRITTEN from memory rather than
+-- extracted, and it: invented a `deduction_amount` column that has never
+-- existed (the real one is `deduction`), replaced the real
+-- `approval_status = 'pending'` filter with three predicates of my own, and
+-- dropped the entire bonus_slab branch — which would have silently removed a
+-- whole approval type from the owner's inbox. The wrong column name is what
+-- made it fail loudly; the other two would not have. This version is 0024's
+-- body with ONE branch appended, generated from that file rather than retyped.
 -- =============================================================================
 
 -- ---------------------------------------------------------------------------
@@ -374,16 +384,27 @@ language sql stable security definer set search_path = public as $$
          initcap(d.damage_type) || ' — ' || d.responsible_type || ' accountable',
          coalesce((select order_code from public.orders o where o.id = d.order_id), '')
            || coalesce(' · ' || (select repeat_code from public.repeats r where r.id = d.repeat_id), ''),
-         coalesce(d.deduction_amount, 0), d.created_at
+         d.deduction, d.created_at
   from public.damage_records d
-  where d.factory_id = public.current_factory_id()
-    and d.responsible_type = 'worker'
-    and coalesce(d.deduction_amount, 0) > 0
-    and d.approved_at is null
+  where d.factory_id = public.current_factory_id() and d.approval_status = 'pending'
 
   union all
 
-  -- NEW. A PO at awaiting_approval is waiting on exactly this person.
+  select 'bonus_slab', p.id,
+         'Bonus slab: ' || p.action,
+         coalesce(p.reason, '') ||
+           coalesce(' · ' || p.daily_stitch_threshold::text || ' stitches', '') ||
+           coalesce(' -> ' || p.bonus_amount::text, ''),
+         p.bonus_amount, p.created_at
+  from public.bonus_slab_proposals p
+  where p.factory_id = public.current_factory_id() and p.status = 'pending'
+
+  union all
+
+  -- NEW in 0083. A PO at awaiting_approval is waiting on exactly this person,
+  -- and this query never asked about purchase orders at all — which is why a PO
+  -- could read "Awaiting Owner Approval" on its own screen while the owner's
+  -- inbox showed nothing of it. Not a broken linkage: a missing branch.
   select 'purchase_order', po.id,
          po.po_code || ' — ' || coalesce(s.name, 'no supplier'),
          coalesce(
@@ -398,7 +419,7 @@ language sql stable security definer set search_path = public as $$
   where po.factory_id = public.current_factory_id()
     and po.status = 'awaiting_approval'
 
-  order by created_at desc
+  order by created_at
 $$;
 
 grant execute on function public.owner_approvals_queue() to authenticated;
