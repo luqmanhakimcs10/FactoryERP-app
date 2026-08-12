@@ -56,7 +56,7 @@ const get = async (who, path) => {
 console.log('\n====== PER-NEEDLE STITCHES / PER-COLOUR THREAD (0082) ======');
 console.log('Factory: Alpha Embroidery Works\n');
 
-for (const w of ['order', 'qa', 'floor', 'store']) await login(w);
+for (const w of ['order', 'qa', 'floor', 'store', 'procurement', 'owner']) await login(w);
 
 {
   const probe = await rpc('floor', 'order_color_requirements', {
@@ -232,6 +232,63 @@ console.log('\n=== 5. Asking for material orders the exact shortfall ===');
 
   console.log(`\n  ${orderCode}: PO ${pos[0]?.po_code} -> ` +
     Object.entries(byColor).map(([c, q]) => `${c}=${q}`).join(', '));
+}
+
+
+// ---------------------------------------------------------------------------
+console.log('\n=== 6. Generated lines are not born at zero (0083) ===');
+{
+  // fm_generate_job_card derived a line's stitches from sheets.stitch_count,
+  // which is 0 on every sheet in this database, while the Builder's own
+  // "stitches per repeat" — the field people actually fill in — was ignored.
+  // Every needle line came out 0 and the whole chain below it read zero.
+  const lines2 = await get('floor', `job_card_lines?job_card_id=eq.${card.id}&select=stitch_count`);
+  chk(lines2.length > 0 && lines2.every((l) => Number(l.stitch_count) > 0),
+    `every needle line has a real stitch count: ${lines2.map((l) => l.stitch_count).join(', ')}`);
+}
+
+// ---------------------------------------------------------------------------
+console.log('\n=== 7. Issue Materials reports the real requirement and refuses ===');
+{
+  const req = await rpc('store', 'job_card_requirements', { p_job_card_id: card.id });
+  chk(req.ok, `job_card_requirements -> HTTP ${req.status}`);
+  const rows = req.body ?? [];
+  const short = rows.find((r) => r.color_code === SHORT);
+
+  chk(Number(short?.required_meters) > 0,
+    `${SHORT} shows a real Required (${short?.required_meters}), not 0`);
+  chk(short?.sufficient === false,
+    `${SHORT} is flagged insufficient (${short?.available_meters} held)`);
+
+  // The DATABASE must refuse, not only the screen. A requirement of 0 used to
+  // pass `available >= required` and issue nothing while reporting success.
+  const issued = await rpc('store', 'sm_issue_materials', { p_job_card_id: card.id });
+  chk(!issued.ok && /Not enough thread/i.test(issued.msg),
+    `sm_issue_materials refuses in the database: "${issued.msg.slice(0, 70)}"`);
+}
+
+// ---------------------------------------------------------------------------
+console.log('\n=== 8. The owner sees the PO awaiting them (0083) ===');
+{
+  const po = (await get('floor', `purchase_orders?order_id=eq.${orderId}&select=id,po_code,status`))[0];
+  if (!po) {
+    no('no PO on this order to approve');
+  } else {
+    await rpc('procurement', 'po_execute', { p_po_id: po.id });
+    const bill = await rpc('procurement', 'po_upload_bill', {
+      p_po_id: po.id, p_bill_url: 'alpha/verify/bill.jpg', p_amount: 1234,
+    });
+    if (!bill.ok) info(`could not move ${po.po_code} on: ${bill.msg.slice(0, 60)}`);
+
+    const queue = await rpc('owner', 'owner_approvals_queue', {});
+    const mine = (queue.body ?? []).find((a) => a.kind === 'purchase_order' && a.id === po.id);
+    chk(!!mine, `${po.po_code} appears in the owner's approvals inbox`);
+    if (mine) {
+      chk(String(mine.title).includes(po.po_code), `the row names the real PO: "${mine.title}"`);
+      chk(Number(mine.amount) === 1234, `and its real amount (${mine.amount}), not a placeholder`);
+      chk(/ x /.test(String(mine.subtitle)), `and its real lines: "${mine.subtitle}"`);
+    }
+  }
 }
 
 console.log(`\n================ ${pass} passed, ${fail} failed ================\n`);

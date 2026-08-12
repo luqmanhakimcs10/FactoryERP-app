@@ -140,7 +140,7 @@ export function IssueDetailScreen() {
         {anyShort ? (
           <ActionBanner
             title="Not enough stock"
-            subtitle="At least one colour is short. Issuing will be refused — receive the outstanding purchase order first, or recount if the shelf disagrees."
+            subtitle="At least one colour is short, or a needle on the job card still has no stitch count. Issuing is refused either way — a missing stitch count is not a requirement of zero. Order the shortfall, or fill in the stitches on the job card."
             style={styles.bannerGap}
           />
         ) : null}
@@ -162,7 +162,7 @@ export function IssueDetailScreen() {
               onPress={() =>
                 confirmAction(
                   'Issue materials',
-                  `${total.toLocaleString()} m across ${rows.length} colour(s) will be deducted from stock and logged against this job card.`,
+                  `${total.toLocaleString()} cone(s) across ${rows.length} colour(s) will be deducted from stock and logged against this job card.`,
                   () => {
                     setError(null);
                     issueMutation.mutate();

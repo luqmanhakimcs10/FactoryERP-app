@@ -30,6 +30,7 @@ import {
   updateJobCardLine,
   deleteJobCardLine,
   addJobCardLine,
+  listSheets,
 } from '../../api/endpoints/orders';
 import { describeDbError } from '../../utils/errors';
 import { useNextStep, NEXT_STEP } from '../../components/ui/NextStepToast';
@@ -59,6 +60,10 @@ export function JobCardReviewScreen() {
     queryKey: ['order', orderId],
     queryFn: () => getOrder(orderId),
   });
+  const { data: sheets } = useQuery({
+    queryKey: ['sheets', orderId],
+    queryFn: () => listSheets(orderId),
+  });
   const { data: jobCard } = useQuery({
     queryKey: ['jobCard', orderId],
     queryFn: () => getJobCard(orderId),
@@ -66,6 +71,10 @@ export function JobCardReviewScreen() {
 
   function invalidate() {
     queryClient.invalidateQueries({ queryKey: ['jobCard', orderId] });
+    // The Job Card's per-colour table reads a DIFFERENT query. Without this it
+    // kept showing the requirement computed from the old stitch counts, so a
+    // saved edit appeared to have done nothing.
+    queryClient.invalidateQueries({ queryKey: ['colorRequirements', orderId] });
   }
 
   const updateLineMutation = useMutation({
@@ -125,6 +134,13 @@ export function JobCardReviewScreen() {
       </Screen>
     );
   }
+
+  // Reference only — the Builder's figure and what it comes to over every
+  // repeat, so the floor manager is not entering stitches blind.
+  const perRepeat = Number(jobCard.card?.stitches_per_repeat ?? 0) || 0;
+  const totalRepeats = (sheets ?? []).reduce(
+    (n, sh) => n + Number(sh.repeats_count ?? 0), 0);
+  const repeatTotal = perRepeat && totalRepeats ? perRepeat * totalRepeats : 0;
 
   const lines = (jobCard.lines ?? []).slice().sort((a, b) => a.needle_number - b.needle_number);
   const anyDirty = lines.some((l) => {
@@ -196,6 +212,15 @@ export function JobCardReviewScreen() {
                   per repeat". Different needles carry different loads in one
                   design, and this is the number the per-colour thread
                   requirement is computed from (0082). */}
+              {/* The order-level figure, for reference. NOT auto-filled: needles
+                  legitimately carry different loads, and pre-filling every one
+                  with the same number would make a guess look deliberate. */}
+              {perRepeat ? (
+                <Text style={styles.stitchHint}>
+                  Order stitches per repeat: {perRepeat.toLocaleString()}
+                  {repeatTotal ? ` · ${repeatTotal.toLocaleString()} across all repeats` : ''}
+                </Text>
+              ) : null}
               <TextField
                 label="Stitches"
                 value={stitches}
@@ -249,6 +274,12 @@ export function JobCardReviewScreen() {
               placeholder="e.g. RED-01"
               mono
             />
+            {perRepeat ? (
+              <Text style={styles.stitchHint}>
+                Order stitches per repeat: {perRepeat.toLocaleString()}
+                {repeatTotal ? ` · ${repeatTotal.toLocaleString()} across all repeats` : ''}
+              </Text>
+            ) : null}
             <TextField
               label="Stitches"
               value={newStitches}
@@ -338,6 +369,7 @@ export function JobCardReviewScreen() {
 }
 
 const styles = StyleSheet.create({
+  stitchHint: { fontSize: fontSize.caption, color: colors.slate, marginBottom: spacing.xs },
   content: { padding: spacing.xl },
   head: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: spacing.sm },
   code: { fontFamily: fontFamily.mono, fontSize: fontSize.title, color: colors.indigoDeep, fontWeight: fontWeight.semibold },
