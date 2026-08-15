@@ -914,6 +914,78 @@ silently "fixing" a suite that would then stop asking a real question.
 
 ---
 
+## Workflow fixes — itemised receipt, shift-free assignment, per-stage QA photos, 3 delivery tabs — (pending verification)
+
+Migration `0084_workflow_fixes.sql`. Seven changes to the production/finishing
+loop. Run it in the SQL editor like every other file — `npm run check:migrations`
+reports it, and `npm run verify:workflow` proves it.
+
+**Do not re-run 0040, 0045, 0056 or 0077 after 0084.** Each of them defines an
+older signature of a function 0084 replaces, and PostgREST resolves overloads by
+argument NAME — so re-pasting one puts the old shape back on the REST surface
+beside the new one. That would make the itemised receipt optional, or a Pass QA
+with no photo callable, or a hand-over with no courier named. `check:migrations`
+was changed to probe those four files by fingerprints 0084 does not touch, so it
+no longer advises re-running them.
+
+### The cycle after 0084
+
+Stage 1 runs on the floor. Every stage after it is a finishing partner's,
+reached and returned through the delivery person, and **inspected on the way
+back**:
+
+```
+in_progress            stage 1 on the floor          -> (FM) Go to QA
+stage_qa               PHOTO REQUIRED                -> (QA) Pass QA
+   |- next stage exists -> handover_for_delivery
+   |- no next stage     -> awaiting_final_qa          (no courier trip to nowhere)
+handover_for_delivery  -> (FM) "Handover to <next stage>", naming a delivery
+                          person AND a finishing partner in one popup
+awaiting_dp_collection -> (DP, Collection) Collect  + photo
+handed_over            -> (DP, Delivery)   Handover + photo   [SLA starts]
+handed_off             out at the partner
+returned_to_delivery   -> (DP, Pickup)     Return to the floor
+awaiting_fm_collection -> (FM) Collect  ->  stage_qa on the NEW stage
+```
+
+Before this, collection reopened the next stage at `in_progress` with no
+checkpoint, so a finishing partner's work — the entire reason the piece left the
+building — was never inspected.
+
+### The seven
+
+| Fix | What changed |
+|-----|--------------|
+| 1 | **Accept inventory is itemised.** `fm_material_issue_lines` lists each item/colour/type with its quantity; the Floor Manager ticks each one off as physically received. `fm_accept_inventory` refuses a partial set — partial receipt is deliberately NOT supported, since a half-accepted issue needs its own status and shortfall record. Each line stamps `received_at`/`received_by`. |
+| 2 | **Assigning a machine no longer opens a shift.** `fm_assign_machine` records the machine and nothing else; `fm_start_production` no longer requires an open shift. `fm_assign_machine_with_shift` is dropped. **The Shift Close / payroll system is untouched** — shifts are opened from Machine & Workforce → Shifts as their own flow, and per-stitch payroll is unchanged. |
+| 3 | **Stage QA requires a photo**, matching Initial QA and the final pass. Enforced in `qa_pass_stage_qa`, not just on the button. Still QA-only; the Floor Manager is refused, as verified from real `floor@` and `qa@` logins. |
+| 4 | **"Handover to \<next stage\>"** — named from the job card's own sequence, opening one popup that captures the delivery person and the finishing partner together. A partner who does not handle the destination stage is refused. |
+| 5 | **Delivery Person has 3 tabs** — Collection / Delivery / Pickup. Which tab a row belongs to is decided in SQL (`dp_orders_queue.tab`), and the queue is now scoped to the delivery person the Floor Manager chose. `dp_send_to_partner` is replaced by `dp_handover_to_partner`, which requires a photo and reads the partner the FM named. |
+| 6 | **Returned work re-enters Stage QA** before advancing — `fm_confirm_collection` lands the piece on `stage_qa` for the stage the partner just did. |
+| 7 | **Final QA shows the whole journey** — `fm_order_journey` returns every recorded event for every repeat on the order, with stage, actor name and role, partner, photos and the out/back timestamps. Nothing new is recorded; `repeat_stage_history` has held it all since Phase 3. |
+
+### Two decisions worth knowing about
+
+- **Pieces already mid-round-trip when 0084 runs carry no `current_delivery_id`.**
+  They stay visible to *every* delivery person rather than to none — an
+  unassigned piece nobody can see is a lost parcel. `dp_sees_repeat` is the one
+  definition of that rule, shared by the queue and both halves of the banner
+  system so they cannot disagree.
+- **Repeats sitting at `handover_for_delivery` on their LAST stage are healed
+  forward to `awaiting_final_qa`.** Under 0084 they have no destination, so
+  nothing could move them.
+
+### Known pre-existing failure, not caused by this change set
+
+`npm run walk:lifecycle` stops in section 2. It deliberately rejects a piece at
+Initial QA, and 0059 then correctly refuses `qa_complete_repeat_qa` until that
+piece has been returned by the vendor and re-inspected — so the walk never
+reaches production. `scripts/drive-to-handover.mjs` already documents this in its
+header and exists precisely because of it. `npm run verify:workflow` drives the
+clean path (every piece passes) and is what covers the loop end to end.
+
+---
+
 ## Project structure
 
 ```

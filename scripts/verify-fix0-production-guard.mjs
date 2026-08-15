@@ -264,8 +264,12 @@ let FRESH = null;
 
     const iss = await q(`material_issues?select=id&order_id=eq.${FRESH.id}&accepted_at=is.null`, A.fm);
     if (iss.body?.[0]) {
+      // 0084: acceptance is itemised — every line ticked off as received.
+      const lines = await rpc('fm_material_issue_lines', A.fm, { p_material_issue_id: iss.body[0].id });
       const acc = await rpc('fm_accept_inventory', A.fm, {
-        p_material_issue_id: iss.body[0].id, p_photo_url: 'alpha/fix0-material.jpg',
+        p_material_issue_id: iss.body[0].id,
+        p_photo_url: 'alpha/fix0-material.jpg',
+        p_received_item_ids: (lines.body ?? []).map((l) => l.item_id),
       });
       chk(acc.status === 200, `floor manager accepted the materials -> HTTP ${acc.status} ${msg(acc)}`);
     }
@@ -275,15 +279,14 @@ let FRESH = null;
 
   if (st === 'machine_selection_pending') {
     const machine = (await rpc('fm_list_machines', A.fm, {})).body?.[0];
-    const worker = (await rpc('list_factory_workers', A.fm, {})).body?.[0];
 
-    const assigned = await rpc('fm_assign_machine_with_shift', A.fm, {
-      p_order_id: FRESH.id, p_machine_id: machine.id, p_worker_id: worker.id,
-      p_worker_photo_url: 'alpha/fix0-worker.jpg',
-      p_open_photo_url: 'alpha/fix0-panel.jpg', p_open_stitches: 100,
+    // 0084: assignment is the machine and nothing else — no worker, no photo,
+    // no shift — and Start Production below no longer waits on one.
+    const assigned = await rpc('fm_assign_machine', A.fm, {
+      p_order_id: FRESH.id, p_machine_id: machine.id,
     });
     chk(assigned.status === 200,
-      `Assign Machine (one action: machine + worker + photo + time) -> shift ${String(assigned.body?.shift_id).slice(0, 8)}`);
+      `Assign Machine (machine only, no shift) -> HTTP ${assigned.status} ${msg(assigned)}`);
 
     const started = await rpc('fm_start_production', A.fm, { p_order_id: FRESH.id });
     chk(started.status === 200 && started.body?.status === 'in_production',

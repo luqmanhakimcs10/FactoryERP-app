@@ -16,6 +16,7 @@ import type {
   StockLedgerRow,
   StockAudit,
   MaterialIssue,
+  MaterialIssueLine,
   PendingMaterialIssueRow,
 } from '../../models/inventoryTypes';
 
@@ -250,10 +251,33 @@ export async function listPendingMaterialAcceptance(): Promise<PendingMaterialIs
   return (data ?? []) as PendingMaterialIssueRow[];
 }
 
-export async function acceptInventory(materialIssueId: string, photoUrl: string): Promise<MaterialIssue> {
+/** The itemised lines behind one material issue — what the FM ticks off (0084). */
+export async function listMaterialIssueLines(
+  materialIssueId: string
+): Promise<MaterialIssueLine[]> {
+  const { data, error } = await supabase.rpc('fm_material_issue_lines', {
+    p_material_issue_id: materialIssueId,
+  });
+  if (error) throw error;
+  return (data ?? []) as MaterialIssueLine[];
+}
+
+/**
+ * Accept a material issue, line by line.
+ *
+ * Every line must be in `receivedItemIds` — the database refuses a partial set
+ * (0084). That is enforced there rather than only here, so the checklist is a
+ * record of a physical count and not a formality the next client can skip.
+ */
+export async function acceptInventory(
+  materialIssueId: string,
+  photoUrl: string,
+  receivedItemIds: string[]
+): Promise<MaterialIssue> {
   const { data, error } = await supabase.rpc('fm_accept_inventory', {
     p_material_issue_id: materialIssueId,
     p_photo_url: photoUrl,
+    p_received_item_ids: receivedItemIds,
   });
   if (error) throw error;
   return data as MaterialIssue;

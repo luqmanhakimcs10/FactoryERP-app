@@ -183,11 +183,47 @@ if (FIXTURE) {
     .find((t) => !stages.some((st) => st.stage_type === t));
   if (third) stages.push({ stage_type: third, is_outsourced: false, sla_hours: 12, partner_id: null });
 }
+
+// Since 0084 every stage AFTER the first is reached by handing the piece to a
+// finishing partner who does that stage, and the database refuses a partner who
+// does not. So a destination stage nobody covers is a dead end — reorder the
+// sequence so covered stages come after the first one wherever possible.
+{
+  const covered = new Set(partners.map((pp) => pp.stage_type));
+  const head = stages[0];
+  const tail = stages.slice(1).sort((a, b) => Number(covered.has(b.stage_type)) - Number(covered.has(a.stage_type)));
+  stages.length = 0;
+  stages.push(head, ...tail);
+  const uncovered = stages.slice(1).filter((st) => !covered.has(st.stage_type)).map((st) => st.stage_type);
+  if (uncovered.length) {
+    // Drop rather than bail: a shorter sequence still drives the order home,
+    // and stopping outright over a missing master record would be worse.
+    for (const t of uncovered) {
+      const i = stages.findIndex((st) => st.stage_type === t);
+      if (i > 0) stages.splice(i, 1);
+    }
+    step(`no finishing partner covers ${uncovered.join(', ')} — dropped from the sequence`);
+  }
+}
 const seq = await rpc('floor', 'fm_set_stage_sequence', {
   p_order_id: orderId,
   p_stages: stages,
 });
 if (!seq.ok) bail(`fm_set_stage_sequence: ${seq.msg}`);
+
+// Who the Floor Manager hands to (0084). The courier is any delivery person;
+// the handler is resolved per repeat, from the stage it is being sent out FOR.
+const couriers = await rpc('floor', 'fm_delivery_people');
+const courierId = (couriers.body ?? [])[0]?.id ?? null;
+if (!courierId) bail('no active delivery person on file — nothing can be handed over');
+const stageRows = await get('floor', `order_stages?order_id=eq.${orderId}&select=sequence,stage_type&order=sequence`);
+function handlerFor(repeatId) {
+  const idx = repeatIndex.get(repeatId) ?? 1;
+  const want = stageRows.find((st) => st.sequence === idx + 1)?.stage_type;
+  return (partners.find((pp) => pp.stage_type === want) ?? {}).id ?? null;
+}
+/** Stage index per repeat, refreshed by the driving loop before each handover. */
+const repeatIndex = new Map();
 
 if (!(await rpc('floor', 'fm_save_job_card_design', {
   p_order_id: orderId, p_design_code: 'DRIVE-01', p_stitches_per_repeat: 1000 })).ok) {
@@ -210,28 +246,33 @@ const issued = await rpc('store', 'sm_issue_materials', {
   p_job_card_id: card.id, p_note: 'handover drive' });
 if (!issued.ok) bail(`sm_issue_materials: ${issued.msg}`);
 const issueId = issued.body?.material_issue_id;
+// 0084: acceptance is itemised — every line has to be ticked off as received.
+const issueLines = await rpc('floor', 'fm_material_issue_lines', { p_material_issue_id: issueId });
+if (!issueLines.ok) bail(`fm_material_issue_lines: ${issueLines.msg}`);
 const acc = await rpc('floor', 'fm_accept_inventory', {
-  p_material_issue_id: issueId, p_photo_url: PHOTO });
+  p_material_issue_id: issueId,
+  p_photo_url: PHOTO,
+  p_received_item_ids: (issueLines.body ?? []).map((l) => l.item_id),
+});
 if (!acc.ok) bail(`fm_accept_inventory: ${acc.msg}`);
 step(`issued ${issued.body?.lines} line(s), ${issued.body?.total_meters} total; accepted`);
 
 // ---------------------------------------------------------------------------
-// 5. Machine + shift, then production
+// 5. Machine, then production
 //
 // This is the step that proves 0076: the machine only becomes known here, which
 // is why mounting had to move out of sm_issue_materials.
+//
+// No shift is opened. 0084 separated the routing decision from the payroll
+// record, so assignment is just the machine and Start Production no longer
+// waits on a shift existing.
 // ---------------------------------------------------------------------------
 const machine = managed[0];
-const assign = await rpc('floor', 'fm_assign_machine_with_shift', {
+const assign = await rpc('floor', 'fm_assign_machine', {
   p_order_id: orderId,
   p_machine_id: machine.id,
-  p_worker_id: workers[0].id,
-  p_worker_photo_url: PHOTO,
-  p_reported_start_time: null,
-  p_open_photo_url: PHOTO,
-  p_open_stitches: 0,
 });
-if (!assign.ok) bail(`fm_assign_machine_with_shift: ${assign.msg}`);
+if (!assign.ok) bail(`fm_assign_machine: ${assign.msg}`);
 
 const mounted = await rpc('floor', 'machine_mounted_list', { p_machine_id: machine.id });
 step(`assigned ${machine.name}; ${(mounted.body ?? []).length} item(s) now ON MACHINE`);
@@ -262,18 +303,25 @@ step(`walking ${repeats.length} repeat(s) through the stage loop`);
 
 for (const rep of repeats) {
   for (let guard = 0; guard < 40; guard++) {
-    const row = (await get('floor', `repeats?id=eq.${rep.id}&select=current_status`))[0];
+    const row = (await get('floor', `repeats?id=eq.${rep.id}&select=current_status,current_stage_index`))[0];
     const st = row?.current_status;
+    repeatIndex.set(rep.id, row?.current_stage_index ?? 1);
     if (st === 'awaiting_final_qa' || st === 'awaiting_qa_final' || st === 'completed') break;
 
     let r;
     switch (st) {
       case 'ready_for_production':
       case 'in_progress':             r = await rpc('floor', 'fm_send_to_stage_qa', { p_repeat_id: rep.id }); break;
-      case 'stage_qa':                r = await rpc('qa', 'qa_pass_stage_qa', { p_repeat_id: rep.id }); break;
-      case 'handover_for_delivery':   r = await rpc('floor', 'fm_hand_over_stage', { p_repeat_id: rep.id }); break;
+      case 'stage_qa':                r = await rpc('qa', 'qa_pass_stage_qa', { p_repeat_id: rep.id, p_photo_url: PHOTO }); break;
+      // 0084: the Floor Manager names the courier and the handler together, and
+      // the handler must be one who does the DESTINATION stage.
+      case 'handover_for_delivery':   r = await rpc('floor', 'fm_hand_over_stage', {
+                                            p_repeat_id: rep.id,
+                                            p_delivery_id: courierId,
+                                            p_partner_id: handlerFor(rep.id),
+                                          }); break;
       case 'awaiting_dp_collection':  r = await rpc('delivery', 'dp_collect_from_floor', { p_repeat_id: rep.id, p_photo_url: PHOTO }); break;
-      case 'handed_over':             r = await rpc('delivery', 'dp_send_to_partner', { p_repeat_id: rep.id, p_partner_id: partner?.id }); break;
+      case 'handed_over':             r = await rpc('delivery', 'dp_handover_to_partner', { p_repeat_id: rep.id, p_photo_url: PHOTO }); break;
       case 'handed_off':              r = await rpc('delivery', 'dp_collect_from_partner', { p_repeat_id: rep.id, p_photo_url: PHOTO }); break;
       case 'returned_to_delivery':    r = await rpc('delivery', 'dp_hand_back_to_floor', { p_repeat_id: rep.id }); break;
       case 'awaiting_fm_collection':  r = await rpc('floor', 'fm_confirm_collection', { p_repeat_id: rep.id }); break;

@@ -227,10 +227,15 @@ const MIGRATIONS = [
   },
   {
     file: '0040_fm_accept_inventory_photo',
-    probes: [
-      () => col('material_issues', 'accepted_photo_url'),
-      () => rpc('fm_accept_inventory', { p_material_issue_id: NIL, p_photo_url: null }),
-    ],
+    // Probed by its COLUMN only. fm_accept_inventory's signature has changed
+    // twice since (0077's body rewrite, then 0084's required item list), and a
+    // probe that tracks the current shape would report 0040 as unapplied the
+    // moment it changes again — then advise re-running it, which would
+    // RESURRECT the 2-arg blanket accept beside the 3-arg one. PostgREST
+    // resolves overloads by argument name, so both would be callable and the
+    // itemised receipt would become optional. The column is what 0040 added and
+    // what nothing since has touched.
+    probes: [() => col('material_issues', 'accepted_photo_url')],
   },
   {
     file: '0041_machine_selection_pending',
@@ -268,7 +273,11 @@ const MIGRATIONS = [
       // opens at in_progress on its own and there is no "Start stage" action.
       // Probing for it made this script report 0045 as unrun forever.
       () => rpc('fm_send_to_stage_qa', { p_repeat_id: NIL }),
-      () => rpc('qa_pass_stage_qa', { p_repeat_id: NIL }),
+      // qa_pass_stage_qa is NOT probed here. 0084 made its photo required and
+      // dropped the 1-arg form; tracking the current shape here would make this
+      // file look unapplied on the next change and advise re-running it, which
+      // would restore a Pass QA that needs no photo. The two RPCs below are
+      // 0045's and have been stable since.
       () => rpc('mark_stage_damage', { p_repeat_id: NIL, p_damage_type: 'other' }),
     ],
   },
@@ -294,8 +303,24 @@ const MIGRATIONS = [
     ],
   },
   { file: '0049_qa_collection_damage_responsible_id', probes: [() => col('damage_records', 'responsible_id')] },
-  { file: '0056_stage_handover_loop', probes: [() => rpc('fm_hand_over_stage', { p_repeat_id: NIL }), () => col('repeats', 'current_partner_id')] },
-  { file: '0057_assign_machine_and_return_photo', probes: [() => col('damage_records', 'ot_return_photo_url')] },
+  {
+    file: '0056_stage_handover_loop',
+    // fm_hand_over_stage is NOT probed: 0084 replaced its 1-arg form with a
+    // 3-arg one, and re-running 0056 on that advice would put both on the REST
+    // surface — a bare hand-over with no courier named, beside the real one.
+    // These three are 0056's own and unchanged since.
+    probes: [
+      () => col('repeats', 'current_partner_id'),
+      () => rpc('dp_collect_from_floor', { p_repeat_id: NIL, p_photo_url: '' }),
+      () => rpc('fm_confirm_collection', { p_repeat_id: NIL }),
+    ],
+  },
+  {
+    file: '0057_assign_machine_and_return_photo',
+    // Only the column is probed: 0084 DROPPED fm_assign_machine_with_shift, the
+    // other half of this file, because assignment no longer opens a shift.
+    probes: [() => col('damage_records', 'ot_return_photo_url')],
+  },
   { file: '0059_repeat_qa_reject_recheck_loop', probes: [() => col('damage_records', 'recheck_state'), () => rpc('sheet_piece_counts', { p_sheet_id: NIL })] },
   { file: '0061_guard_production_needs_coded_repeats', probes: [() => rpc('assert_order_has_repeats', { p_order_id: NIL })] },
   { file: '0062_partner_active_work_queues_and_qa_photo', probes: [() => rpc('my_queue_summary'), () => col('repeats', 'partner_ready_at')] },
@@ -401,8 +426,10 @@ const MIGRATIONS = [
   },
   {
     file: '0077_restore_accept_inventory_advance',
-    probes: [() => rpc('fm_accept_inventory', { p_material_issue_id: NIL, p_photo_url: '' })],
-    note: "body-only fixes to fm_accept_inventory (0041's status advance) and sm_issue_materials (0051's zero-requirement guard) at their existing signatures — nothing on the REST surface tells the restored versions from the broken ones. `npm run drive:handover` is what proves it: without 0077 the drive stops dead at machine assignment because the order never leaves job_card_confirmed.",
+    probes: [() => rpc('fm_accept_inventory', {
+      p_material_issue_id: NIL, p_photo_url: '', p_received_item_ids: [],
+    })],
+    note: "SUPERSEDED BY 0084, which carries 0077's restored body forward into the itemised 3-arg accept — so the 3-arg signature existing is the fingerprint for both. Do not re-run 0077 on its own once 0084 is live: it would put the 2-arg blanket accept back on the REST surface. Originally: body-only fixes to fm_accept_inventory (0041's status advance) and sm_issue_materials (0051's zero-requirement guard) at their existing signatures — nothing on the REST surface tells the restored versions from the broken ones. `npm run drive:handover` is what proves it: without 0077 the drive stops dead at machine assignment because the order never leaves job_card_confirmed.",
   },
   {
     file: '0078_handover_gate_from_repeats',
@@ -412,6 +439,18 @@ const MIGRATIONS = [
   {
     file: '0081_inventory_ledger_by_item',
     probes: [() => rpc('inventory_ledger', { p_item_id: NIL })],
+  },
+  {
+    file: '0084_workflow_fixes',
+    probes: [
+      () => col('material_issue_items', 'received_at'),
+      () => col('repeats', 'current_delivery_id'),
+      () => rpc('fm_material_issue_lines', { p_material_issue_id: NIL }),
+      () => rpc('fm_delivery_people'),
+      () => rpc('dp_handover_to_partner', { p_repeat_id: NIL, p_photo_url: '', p_partner_id: NIL }),
+      () => rpc('fm_order_journey', { p_order_id: NIL }),
+    ],
+    note: "the BODY changes — Stage QA's photo, the last-stage short-circuit, collection landing on stage_qa, and Start Production no longer needing an open shift — share their signatures with the versions before them, so no probe can tell them apart. `npm run verify:workflow` is what proves those: it drives one order through both stages and asserts each of them on a live repeat.",
   },
   {
     file: '0082_per_needle_stitches_and_color_requirements',

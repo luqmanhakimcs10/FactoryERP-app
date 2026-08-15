@@ -23,6 +23,9 @@ export type HandoverStatus =
   | 'returned_to_delivery'
   | 'awaiting_fm_collection';
 
+/** Which of the Delivery Person's three tabs a row belongs in (0084). */
+export type DeliveryTab = 'collection' | 'delivery' | 'pickup';
+
 export interface DpOrderRow {
   repeat_id: string;
   repeat_code: string;
@@ -36,8 +39,16 @@ export interface DpOrderRow {
   stage_sequence: number | null;
   total_stages: number;
   current_status: HandoverStatus;
+  /**
+   * Decided in SQL, not here. Which tab a status belongs to is part of the
+   * workflow definition; a client that works it out for itself can file a piece
+   * under a tab whose action the database will then refuse.
+   */
+  tab: DeliveryTab;
   partner_id: string | null;
   partner_name: string | null;
+  /** The stage this trip is FOR — the one the Floor Manager's button named. */
+  destination_stage: string | null;
   sla_hours: number | null;
   handed_off_at: string | null;
   sla_breached: boolean;
@@ -45,6 +56,8 @@ export interface DpOrderRow {
   arrived_at: string | null;
   /** Set once the finishing partner says their work is done. */
   partner_ready_at: string | null;
+  /** Null on pieces handed over before 0084 — visible to every delivery person. */
+  current_delivery_id: string | null;
 }
 
 export interface PendingCollectionRow {
@@ -72,9 +85,33 @@ export interface QaFinalRow {
 // Floor Manager
 // ---------------------------------------------------------------------------
 
-/** Stage QA passed → release the piece to the Delivery Person. */
-export async function handOverStage(repeatId: string) {
-  const { data, error } = await supabase.rpc('fm_hand_over_stage', { p_repeat_id: repeatId });
+export interface DeliveryPerson {
+  id: string;
+  display_name: string;
+}
+
+/** Who the Floor Manager can hand a stage to. */
+export async function listDeliveryPeople(): Promise<DeliveryPerson[]> {
+  const { data, error } = await supabase.rpc('fm_delivery_people');
+  if (error) throw error;
+  return (data ?? []) as DeliveryPerson[];
+}
+
+/**
+ * Stage QA passed → release the piece, naming BOTH the courier and the handler
+ * (0084). Picking one without the other was the old shape's problem: the
+ * delivery person chose the finishing partner on their own, so a routing
+ * decision about the order was made by whoever happened to pick the piece up.
+ *
+ * The partner is validated against the DESTINATION stage's type in the database,
+ * so a partner who does not do that stage is refused here, not discovered later.
+ */
+export async function handOverStage(repeatId: string, deliveryId: string, partnerId: string) {
+  const { data, error } = await supabase.rpc('fm_hand_over_stage', {
+    p_repeat_id: repeatId,
+    p_delivery_id: deliveryId,
+    p_partner_id: partnerId,
+  });
   if (error) throw error;
   return data;
 }
@@ -99,7 +136,13 @@ export async function listPendingCollections(orderId?: string | null): Promise<P
 }
 
 // ---------------------------------------------------------------------------
-// Delivery Person — the single Orders tab
+// Delivery Person — Collection / Delivery / Pickup (0084)
+//
+// One query still backs all three tabs: they are three views of one queue, and
+// the row carries its own `tab`. Since 0084 the queue is also SCOPED — a
+// delivery person sees the pieces the Floor Manager assigned to them, plus any
+// with no assignment at all (pre-0084 rows, which would otherwise be invisible
+// to everyone).
 // ---------------------------------------------------------------------------
 
 export async function listDeliveryOrders(): Promise<DpOrderRow[]> {
@@ -118,11 +161,23 @@ export async function collectFromFloor(repeatId: string, photoUrl: string) {
   return data;
 }
 
-/** Send the piece out to the chosen handler. Starts the SLA clock. */
-export async function sendToPartner(repeatId: string, partnerId: string) {
-  const { data, error } = await supabase.rpc('dp_send_to_partner', {
+/**
+ * Hand the piece to the finishing partner the Floor Manager named. Photo
+ * required; starts the SLA clock.
+ *
+ * `partnerId` is a fallback, not a choice — the database uses it only when the
+ * repeat carries no partner, which can only be a piece handed over by a
+ * pre-0084 client. The tab shows a picker in exactly that case and no other.
+ */
+export async function handoverToPartner(
+  repeatId: string,
+  photoUrl: string,
+  partnerId?: string | null
+) {
+  const { data, error } = await supabase.rpc('dp_handover_to_partner', {
     p_repeat_id: repeatId,
-    p_partner_id: partnerId,
+    p_photo_url: photoUrl,
+    p_partner_id: partnerId ?? null,
   });
   if (error) throw error;
   return data;
@@ -173,29 +228,58 @@ export async function qaFinalPass(repeatId: string, photoUrl: string, note?: str
 }
 
 // ---------------------------------------------------------------------------
-// Machine assignment in one action (0057)
+// Machine assignment (0084)
+//
+// `assignMachineWithShift` lived here. It fused the routing decision ("this
+// order runs on machine 3") with a payroll record ("Asha is on machine 3 from
+// 08:00") and made the first impossible without the second. 0084 drops the RPC;
+// assignment is `assignMachine` below, and shifts are opened from the Shift
+// screens as their own independent flow.
 // ---------------------------------------------------------------------------
 
-export async function assignMachineWithShift(params: {
-  orderId: string;
-  machineId: string;
-  workerId: string;
-  workerPhotoUrl: string;
-  reportedStartTime?: string | null;
-  openPhotoUrl?: string | null;
-  openStitches?: number;
-}): Promise<{ order_id: string; machine_id: string; shift_id: string; reused_shift: boolean }> {
-  const { data, error } = await supabase.rpc('fm_assign_machine_with_shift', {
-    p_order_id: params.orderId,
-    p_machine_id: params.machineId,
-    p_worker_id: params.workerId,
-    p_worker_photo_url: params.workerPhotoUrl,
-    p_reported_start_time: params.reportedStartTime ?? null,
-    p_open_photo_url: params.openPhotoUrl ?? null,
-    p_open_stitches: params.openStitches ?? 0,
+/** Record which machine an order runs on. No shift, no worker, no photo. */
+export async function assignMachine(orderId: string, machineId: string) {
+  const { data, error } = await supabase.rpc('fm_assign_machine', {
+    p_order_id: orderId,
+    p_machine_id: machineId,
   });
   if (error) throw error;
-  return data as any;
+  return data;
+}
+
+// ---------------------------------------------------------------------------
+// The journey summary behind Final QA (0084)
+// ---------------------------------------------------------------------------
+
+export interface JourneyRow {
+  history_id: string;
+  repeat_id: string;
+  repeat_code: string;
+  stage_sequence: number | null;
+  stage_type: string | null;
+  status: string;
+  note: string | null;
+  actor_name: string | null;
+  actor_role: string | null;
+  partner_name: string | null;
+  photo_url: string | null;
+  return_photo_url: string | null;
+  handed_off_at: string | null;
+  returned_at: string | null;
+  created_at: string;
+}
+
+/**
+ * Every recorded event for every repeat on an order, oldest first per repeat.
+ *
+ * This is a read over `repeat_stage_history`, which has held all of it since
+ * Phase 3 — nothing new is written for the summary. It was simply only
+ * reachable one repeat at a time, through a collapsed panel.
+ */
+export async function getOrderJourney(orderId: string): Promise<JourneyRow[]> {
+  const { data, error } = await supabase.rpc('fm_order_journey', { p_order_id: orderId });
+  if (error) throw error;
+  return (data ?? []) as JourneyRow[];
 }
 
 // ---------------------------------------------------------------------------

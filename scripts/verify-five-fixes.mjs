@@ -154,9 +154,14 @@ console.log('\n=== FIX 3b. Partner Active Work + "Handover to delivery person" =
   chk(before.status === 200, `partner_active_work -> HTTP ${before.status} ${msg(before)}`);
 
   // Drive a piece out to this partner so there is guaranteed active work.
-  const partnerRow = await q('finishing_partners?select=id,name&user_id=not.is.null&deleted_at=is.null&limit=1', A.fm);
+  const partnerRow = await q('finishing_partners?select=id,name,stage_type&user_id=not.is.null&deleted_at=is.null&limit=1', A.fm);
   const partnerId = partnerRow.body?.[0]?.id;
-  chk(!!partnerId, `partner linked to a login: ${partnerRow.body?.[0]?.name}`);
+  const partnerStage = partnerRow.body?.[0]?.stage_type;
+  chk(!!partnerId, `partner linked to a login: ${partnerRow.body?.[0]?.name} (${partnerStage})`);
+
+  // 0084: the Floor Manager names the courier at handover.
+  const couriers = await rpc('fm_delivery_people', A.fm, {});
+  const courierId = (couriers.body ?? [])[0]?.id ?? null;
 
   const cand = await q(
     'repeats?select=id,repeat_code,current_status&current_status=in.(in_progress,handover_for_delivery,awaiting_dp_collection,handed_over)&limit=1',
@@ -165,17 +170,30 @@ console.log('\n=== FIX 3b. Partner Active Work + "Handover to delivery person" =
   if (walk && partnerId) {
     const step = {
       in_progress: () => rpc('fm_send_to_stage_qa', A.fm, { p_repeat_id: walk.id }),
-      stage_qa: () => rpc('qa_pass_stage_qa', A.qa, { p_repeat_id: walk.id }),
-      handover_for_delivery: () => rpc('fm_hand_over_stage', A.fm, { p_repeat_id: walk.id }),
+      // 0084: Stage QA needs a photo, and the handover names courier + handler.
+      stage_qa: () => rpc('qa_pass_stage_qa', A.qa, { p_repeat_id: walk.id, p_photo_url: 'alpha/f5.jpg' }),
+      handover_for_delivery: () => rpc('fm_hand_over_stage', A.fm, {
+        p_repeat_id: walk.id, p_delivery_id: courierId, p_partner_id: partnerId,
+      }),
       awaiting_dp_collection: () => rpc('dp_collect_from_floor', A.dp, { p_repeat_id: walk.id, p_photo_url: 'alpha/f5.jpg' }),
-      handed_over: () => rpc('dp_send_to_partner', A.dp, { p_repeat_id: walk.id, p_partner_id: partnerId }),
+      handed_over: () => rpc('dp_handover_to_partner', A.dp, { p_repeat_id: walk.id, p_photo_url: 'alpha/f5.jpg' }),
     };
     let cur = walk.current_status;
     for (let i = 0; i < 8 && cur !== 'handed_off'; i++) {
       const f = step[cur]; if (!f) break;
       cur = (await f()).body?.current_status;
     }
-    chk(cur === 'handed_off', `${walk.repeat_code} handed to the partner -> ${cur}`);
+    // Since 0084 a piece on its LAST stage never reaches handed_off — Pass QA
+    // sends it straight to Final QA rather than out on a trip to nowhere. That
+    // is the fix working, not a failure, so it is reported as a skip.
+    if (cur === 'awaiting_final_qa') {
+      console.log(`  ..    ${walk.repeat_code} was on its last stage — went straight to Final QA (0084), no partner leg to check here`);
+      walk = null;
+    } else {
+      chk(cur === 'handed_off', `${walk.repeat_code} handed to the partner -> ${cur}`);
+    }
+  }
+  if (walk && partnerId) {
 
     const active = await rpc('partner_active_work', A.fp, {});
     const row = (active.body ?? []).find((x) => x.repeat_id === walk.id);
