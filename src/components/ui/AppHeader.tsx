@@ -100,6 +100,10 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-between',
     gap: spacing.xs,
+    // The bell's dropdown hangs BELOW this header, over the screen's content —
+    // which renders after it and would otherwise paint on top and swallow the
+    // taps. Same stacking trap as DashboardHeader's search bar.
+    zIndex: 30,
   },
   left: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: spacing.md },
   heading: {

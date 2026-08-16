@@ -29,7 +29,26 @@ import { routeForBanner } from '../../navigation/taskQueues';
 import { useAuth } from '../../auth/AuthContext';
 import { spacing } from '../../constants/theme';
 
-export function TaskBanners() {
+interface TaskBannersProps {
+  /**
+   * Queue keys to leave out.
+   *
+   * For a screen that is ITSELF the destination of some of its own banners,
+   * those banners are a second copy of a control already on screen. The
+   * Delivery Person's dashboard is the case this exists for: dp_collect,
+   * dp_send, dp_pickup and dp_handback all point at its own three tabs, which
+   * sit directly above the banner stack already carrying the same counts. Five
+   * banners then occupy ~680px of a 900px viewport and push every row below the
+   * fold, so all three tabs look identical and switching between them appears
+   * to do nothing. The duplicate is not just noise; it hides the work.
+   *
+   * A banner whose destination is elsewhere is NOT excluded — the delivery
+   * person keeps "ready for final delivery", which has no tab of its own.
+   */
+  hideQueues?: string[];
+}
+
+export function TaskBanners({ hideQueues }: TaskBannersProps = {}) {
   const navigation = useNavigation<any>();
   const { profile } = useAuth();
 
@@ -46,7 +65,9 @@ export function TaskBanners() {
   // `own_task` filters out the owner's oversight rows: company_admin counts
   // every role's queue for the bell, but only their approvals are theirs to
   // act on. Without this the owner opens the app to nine stacked banners.
-  const rows = (data ?? []).filter((r) => r.own_task && Number(r.count) > 0);
+  const rows = (data ?? []).filter(
+    (r) => r.own_task && Number(r.count) > 0 && !hideQueues?.includes(r.queue_key)
+  );
   if (rows.length === 0) return null;
 
   return (
