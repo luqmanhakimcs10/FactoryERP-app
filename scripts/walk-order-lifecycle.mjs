@@ -105,11 +105,14 @@ function bail(why) {
 (async () => {
   console.log(`\n  Full lifecycle walk — factory: ${FACTORY}\n`);
 
-  for (const who of ['owner', 'order', 'qa', 'floor', 'store']) {
+  // delivery and partner joined this list with 0084: the stage loop now routes
+  // every piece through both of them, so a walk that cannot sign in as them
+  // cannot walk the loop at all.
+  for (const who of ['owner', 'order', 'qa', 'floor', 'store', 'delivery', 'partner']) {
     T[who] = await login(who);
     if (!T[who]) bail(`could not sign in as ${who}@${FACTORY}.test`);
   }
-  ok('signed in as order_taker, qa, floor_manager, store_manager, owner');
+  ok('signed in as order_taker, qa, floor_manager, store_manager, delivery, finishing_partner, owner');
 
   // ---------------------------------------------------------------------------
   // 0. Regression guard: nothing is left stranded informed-but-unconfirmed.
@@ -242,14 +245,17 @@ function bail(why) {
   const startCount = lines.length;
   info(`generated ${startCount} line(s): ${lines.map((l) => l.needle_number + ':' + l.thread_color_code).join(', ')}`);
 
+  // 0082 made p_stitch_count required and DROPPED the 2-arg form; PostgREST
+  // resolves overloads by argument name, so the old call 404s as "function not
+  // found" rather than failing on the argument.
   const added = await rpc('floor', 'fm_add_job_card_line', {
-    p_job_card_id: card.id, p_thread_color_code: 'WALK-ADD',
+    p_job_card_id: card.id, p_thread_color_code: 'WALK-ADD', p_stitch_count: 100,
   });
   chk(added.ok && added.body?.needle_number === startCount + 1,
     `+ Add needle assigns the NEXT number, not a picked one → Needle ${added.body?.needle_number ?? added.msg}`);
 
   const blank = await rpc('floor', 'fm_add_job_card_line', {
-    p_job_card_id: card.id, p_thread_color_code: '   ',
+    p_job_card_id: card.id, p_thread_color_code: '   ', p_stitch_count: 100,
   });
   chk(!blank.ok && /thread colour is required/i.test(blank.msg),
     `a blank thread colour is refused: "${blank.msg.slice(0, 50)}"`);
@@ -258,7 +264,7 @@ function bail(why) {
   lines = await needles();
   for (let n = lines.length; n < 6; n++) {
     const fill = await rpc('floor', 'fm_add_job_card_line', {
-      p_job_card_id: card.id, p_thread_color_code: `WALK-F${n}`,
+      p_job_card_id: card.id, p_thread_color_code: `WALK-F${n}`, p_stitch_count: 100,
     });
     if (!fill.ok) no(`filling to 6 needles: ${fill.msg}`);
   }
@@ -266,7 +272,7 @@ function bail(why) {
   chk(lines.length === 6, `filled to the cap → ${lines.length} lines`);
 
   const overCap = await rpc('floor', 'fm_add_job_card_line', {
-    p_job_card_id: card.id, p_thread_color_code: 'WALK-7TH',
+    p_job_card_id: card.id, p_thread_color_code: 'WALK-7TH', p_stitch_count: 100,
   });
   chk(!overCap.ok && /capped at 6/i.test(overCap.msg),
     `a 7th needle is refused: "${overCap.msg.slice(0, 50)}"`);
@@ -284,7 +290,7 @@ function bail(why) {
 
   // With a slot free again, the cap lets exactly one more back in.
   const readd = await rpc('floor', 'fm_add_job_card_line', {
-    p_job_card_id: card.id, p_thread_color_code: 'WALK-BACK',
+    p_job_card_id: card.id, p_thread_color_code: 'WALK-BACK', p_stitch_count: 100,
   });
   chk(readd.ok && readd.body?.needle_number === 6,
     `deleting frees a slot — next add is Needle ${readd.body?.needle_number ?? readd.msg}`);
@@ -335,10 +341,29 @@ function bail(why) {
     chk(!!pendingRow, `  appears in the floor manager's Accept inventory tab`);
 
     if (pendingRow) {
-      const acc = await rpc('floor', 'fm_accept_inventory', {
-        p_material_issue_id: pendingRow.material_issue_id, p_photo_url: PHOTO,
+      // 0084: acceptance is itemised. Every line on the issue has to be ticked
+      // off as physically received — a partial set is refused by the database,
+      // not just greyed out on the screen.
+      const lines = await rpc('floor', 'fm_material_issue_lines', {
+        p_material_issue_id: pendingRow.material_issue_id,
       });
-      chk(acc.ok, `fm_accept_inventory (photo required) → ${acc.ok ? 'ok' : acc.msg}`);
+      chk(lines.ok && (lines.body ?? []).length > 0,
+        `fm_material_issue_lines → ${lines.ok ? `${lines.body.length} line(s) to tick off` : lines.msg}`);
+
+      const partial = await rpc('floor', 'fm_accept_inventory', {
+        p_material_issue_id: pendingRow.material_issue_id,
+        p_photo_url: PHOTO,
+        p_received_item_ids: [],
+      });
+      chk(!partial.ok && /every line/i.test(partial.msg),
+        `  accepting with nothing ticked is refused: "${partial.msg.slice(0, 50)}"`);
+
+      const acc = await rpc('floor', 'fm_accept_inventory', {
+        p_material_issue_id: pendingRow.material_issue_id,
+        p_photo_url: PHOTO,
+        p_received_item_ids: (lines.body ?? []).map((l) => l.item_id),
+      });
+      chk(acc.ok, `fm_accept_inventory (photo + every line ticked) → ${acc.ok ? 'ok' : acc.msg}`);
       cur = (await get('floor', `orders?id=eq.${orderId}&select=status`)).body?.[0]?.status;
       chk(cur === 'machine_selection_pending', `  order → machine_selection_pending (is ${cur})`);
     }
@@ -346,50 +371,33 @@ function bail(why) {
 
   // ---------------------------------------------------------------------------
   // 5. Assign machine → start production
+  //
+  // 0084 separated the routing decision from the payroll record: assignment no
+  // longer opens a shift, and Start Production no longer requires one. This
+  // section deliberately does NOT open a shift first — if it had to, the fix
+  // would not be working.
   // ---------------------------------------------------------------------------
-  console.log('\n  5. Assign machine → START PRODUCTION');
+  console.log('\n  5. Assign machine → START PRODUCTION (no shift needed)');
   const machines = await get('floor', 'machines?select=id,name,managed_by&deleted_at=is.null');
-  let shifts = await get('floor', 'shifts?select=machine_id&status=eq.open');
-  let openIds = new Set((shifts.body ?? []).map((s) => s.machine_id));
-  // Both fm_open_shift and fm_assign_machine refuse a floor manager any machine
-  // whose managed_by isn't their own uid — an unmanaged (null) machine is NOT
-  // usable here, even though fm_shifts_for_date happily lists it.
+  // fm_assign_machine refuses a floor manager any machine whose managed_by
+  // isn't their own uid — an unmanaged (null) machine is NOT usable here, even
+  // though fm_shifts_for_date happily lists it.
   const myMachines = (machines.body ?? []).filter((m) => m.managed_by === T.floor.userId);
-  let usable = myMachines.find((m) => openIds.has(m.id));
 
-  if (!usable && myMachines.length) {
-    // No open shift — `verify:tenancy` closes M-01's as part of its own run, so
-    // this walk cannot assume one is left over. Opening a shift is a legitimate
-    // floor-manager step (Stage 7) that precedes assignment anyway.
-    const workers = await get('floor', 'profiles?select=id,display_name&role=eq.worker&is_active=is.true&limit=1');
-    const worker = workers.body?.[0];
-    if (worker) {
-      const opened = await rpc('floor', 'fm_open_shift', {
-        p_machine_id: myMachines[0].id,
-        p_worker_id: worker.id,
-        p_order_id: null,
-        p_open_photo_url: PHOTO,
-        p_open_stitches: 0,
-        p_worker_photo_url: PHOTO,
-      });
-      chk(opened.ok, `no open shift — opened one on ${myMachines[0].name} → ${opened.ok ? 'ok' : opened.msg}`);
-      if (opened.ok) {
-        shifts = await get('floor', 'shifts?select=machine_id&status=eq.open');
-        openIds = new Set((shifts.body ?? []).map((s) => s.machine_id));
-        usable = myMachines.find((m) => openIds.has(m.id));
-      }
-    }
-  }
-
-  if (!usable) {
+  if (!myMachines.length) {
     // Beta has machine_workforce disabled; assert the module gate instead.
     const refused = await rpc('floor', 'fm_assign_machine', { p_order_id: orderId, p_machine_id: NIL });
     if (/not available for your factory/i.test(refused.msg)) {
       ok(`machine assignment correctly gated off: "${refused.msg}"`);
       bail('Machine & Workforce is disabled for this factory — production stages are out of scope here');
     }
-    bail('no machine with an open shift is available to this floor manager — open a shift first');
+    bail('this floor manager manages no machine');
   }
+
+  const usable = myMachines[0];
+  const openShifts = await get('floor', 'shifts?select=machine_id&status=eq.open');
+  const hasShift = (openShifts.body ?? []).some((sh) => sh.machine_id === usable.id);
+  info(`using ${usable.name} — ${hasShift ? 'it happens to have an open shift' : 'NO open shift on it'}`);
 
   const assign = await rpc('floor', 'fm_assign_machine', { p_order_id: orderId, p_machine_id: usable.id });
   chk(assign.ok, `fm_assign_machine (${usable.name}) → ${assign.ok ? 'ok' : assign.msg}`);
@@ -403,8 +411,19 @@ function bail(why) {
 
   // ---------------------------------------------------------------------------
   // 6. The stage loop, with the QA boundary tested from real sessions
+  //
+  // The cycle here is 0084's. Stage 1 runs on the floor; every stage after it is
+  // a finishing partner's, reached and returned through the delivery person, and
+  // inspected on the way back. So one lap is:
+  //
+  //   in_progress -> (FM) Go to QA -> stage_qa -> (QA) Pass +PHOTO
+  //     -> handover_for_delivery -> (FM) Handover naming courier AND partner
+  //     -> the delivery round trip -> (FM) Collect -> stage_qa on the NEW stage
+  //
+  // and the last stage's Pass QA goes straight to awaiting_final_qa instead,
+  // because there is nothing left to send it out for.
   // ---------------------------------------------------------------------------
-  console.log('\n  6. Stage loop — FM starts/sends, QA passes (boundary from real logins)');
+  console.log('\n  6. Stage loop — FM sends/hands over, QA passes (boundary from real logins)');
   const stages = (await get('floor', `order_stages?order_id=eq.${orderId}&select=id,sequence,stage_type&order=sequence`)).body ?? [];
   const walkReps = (await get('floor',
     `repeats?select=id,repeat_code,current_status,sheets!inner(order_id)&sheets.order_id=eq.${orderId}`)).body ?? [];
@@ -416,15 +435,16 @@ function bail(why) {
   const qaVisible = await get('qa', `orders?id=eq.${orderId}&select=status`);
   chk(qaVisible.body?.[0]?.status === 'in_production', `QA can see ${orderCode} in production`);
 
-  for (const st of stages) {
-    const startStage = await rpc('floor', 'fm_start_stage', { p_repeat_id: rep.id });
-    chk(startStage.ok, `[${st.stage_type}] fm_start_stage (FM) → ${startStage.ok ? 'in_progress' : startStage.msg}`);
+  const allPartners = (await get('floor', 'finishing_partners?select=id,name,stage_type&deleted_at=is.null')).body ?? [];
+  const dpPeople = await rpc('floor', 'fm_delivery_people');
+  const courier = (dpPeople.body ?? [])[0];
 
+  for (const st of stages) {
     const toQa = await rpc('floor', 'fm_send_to_stage_qa', { p_repeat_id: rep.id });
     chk(toQa.ok, `[${st.stage_type}] fm_send_to_stage_qa (FM) → ${toQa.ok ? 'stage_qa' : toQa.msg}`);
 
-    // FIX 3 — the boundary, on a REAL repeat sitting at stage_qa, not a nil id.
-    const fmTries = await rpc('floor', 'qa_pass_stage_qa', { p_repeat_id: rep.id });
+    // The boundary, on a REAL repeat sitting at stage_qa, not a nil id.
+    const fmTries = await rpc('floor', 'qa_pass_stage_qa', { p_repeat_id: rep.id, p_photo_url: PHOTO });
     chk(fmTries.status === 403 && /not permitted/i.test(fmTries.msg),
       `[${st.stage_type}] floor_manager REFUSED Pass QA on a live stage_qa repeat (${fmTries.status})`);
 
@@ -432,18 +452,65 @@ function bail(why) {
     chk(fmDamage.status === 403 && /not permitted/i.test(fmDamage.msg),
       `[${st.stage_type}] floor_manager REFUSED Mark damage on the same repeat (${fmDamage.status})`);
 
-    const qaPasses = await rpc('qa', 'qa_pass_stage_qa', { p_repeat_id: rep.id });
-    chk(qaPasses.ok, `[${st.stage_type}] QA PASSED it → ${qaPasses.ok ? qaPasses.body?.current_status : qaPasses.msg}`);
+    // 0084: the photo is required by the database, not just by the button.
+    const passless = await rpc('qa', 'qa_pass_stage_qa', { p_repeat_id: rep.id, p_photo_url: '' });
+    chk(!passless.ok && /photo/i.test(passless.msg),
+      `[${st.stage_type}] Pass QA WITHOUT a photo is refused: "${passless.msg.slice(0, 45)}"`);
+
+    const qaPasses = await rpc('qa', 'qa_pass_stage_qa', { p_repeat_id: rep.id, p_photo_url: PHOTO });
+    chk(qaPasses.ok, `[${st.stage_type}] QA PASSED it with a photo → ${qaPasses.ok ? qaPasses.body?.current_status : qaPasses.msg}`);
 
     const isLast = st.sequence === stages.length;
     if (isLast) {
       chk(qaPasses.body?.current_status === 'awaiting_final_qa',
-        `  last stage → awaiting_final_qa (drives the "ready for final QA" guidance)`);
-    } else {
-      chk(qaPasses.body?.current_status === 'awaiting_stage',
-        `  advanced to the next stage (awaiting_stage)`);
+        `  last stage → awaiting_final_qa, with no courier trip to nowhere`);
+      break;
     }
+
+    chk(qaPasses.body?.current_status === 'handover_for_delivery',
+      `  mid-sequence → handover_for_delivery`);
+
+    // ---- The handover names the destination, the courier and the handler ----
+    const nextStage = stages.find((x) => x.sequence === st.sequence + 1);
+    const handler = allPartners.find((pp) => pp.stage_type === nextStage.stage_type);
+    if (!courier || !handler) {
+      no(`  cannot hand over for ${nextStage.stage_type}: ${!courier ? 'no delivery person on file' : 'no partner handles it'}`);
+      break;
+    }
+    const handed = await rpc('floor', 'fm_hand_over_stage', {
+      p_repeat_id: rep.id, p_delivery_id: courier.id, p_partner_id: handler.id,
+    });
+    chk(handed.ok && handed.body?.current_status === 'awaiting_dp_collection',
+      `  "Handover to ${nextStage.stage_type}" (${courier.display_name} → ${handler.name}) → ${handed.ok ? handed.body.current_status : handed.msg}`);
+    if (!handed.ok) break;
+
+    // ---- The delivery person's three legs, each with its photo ----
+    const queued = await rpc('delivery', 'dp_orders_queue');
+    const mineRow = (queued.body ?? []).find((r) => r.repeat_id === rep.id);
+    chk(mineRow?.tab === 'collection', `  it lands in the delivery person's Collection tab (is ${mineRow?.tab})`);
+
+    chk((await rpc('delivery', 'dp_collect_from_floor', { p_repeat_id: rep.id, p_photo_url: PHOTO })).ok,
+      '  DP collects from the floor (photo)');
+    const out = await rpc('delivery', 'dp_handover_to_partner', { p_repeat_id: rep.id, p_photo_url: PHOTO });
+    chk(out.ok && out.body?.current_status === 'handed_off',
+      `  DP hands it to ${handler.name} (photo) → ${out.ok ? out.body.current_status : out.msg}`);
+    chk((await rpc('delivery', 'dp_collect_from_partner', { p_repeat_id: rep.id, p_photo_url: PHOTO })).ok,
+      '  DP collects it back from the partner (photo)');
+    chk((await rpc('delivery', 'dp_hand_back_to_floor', { p_repeat_id: rep.id })).ok,
+      '  DP returns it to the Floor Manager');
+
+    // ---- and what comes back is inspected before it advances ----
+    const collected = await rpc('floor', 'fm_confirm_collection', { p_repeat_id: rep.id });
+    chk(collected.ok && collected.body?.current_status === 'stage_qa',
+      `  FM confirms collection → ${collected.ok ? collected.body.current_status : collected.msg} on ${nextStage.stage_type}, NOT in_progress`);
+    chk(collected.body?.current_stage_index === st.sequence + 1,
+      `  and the repeat is on stage ${collected.body?.current_stage_index}`);
   }
+
+  // The whole journey is readable in one call — what Final QA now renders.
+  const journey = await rpc('floor', 'fm_order_journey', { p_order_id: orderId });
+  chk(journey.ok && (journey.body ?? []).length > 0,
+    `fm_order_journey → ${journey.ok ? `${journey.body.length} recorded event(s) across the order` : journey.msg}`);
 
   // QA's other action is reachable too — checked on a second repeat so the one
   // above stays clean at awaiting_final_qa.
@@ -455,9 +522,9 @@ function bail(why) {
     chk(qaDamage.ok, `QA can Mark damage on ${spare.repeat_code} → ${qaDamage.ok ? 'damage recorded' : qaDamage.msg}`);
   }
 
-  // Mirror boundary: QA must NOT hold the floor manager's two actions.
-  const qaStart = await rpc('qa', 'fm_start_stage', { p_repeat_id: rep.id });
-  chk(qaStart.status === 403, `qa REFUSED fm_start_stage — the mirror boundary holds (${qaStart.status})`);
+  // Mirror boundary: QA must NOT hold the floor manager's actions.
+  const qaHands = await rpc('qa', 'fm_confirm_collection', { p_repeat_id: rep.id });
+  chk(qaHands.status === 403, `qa REFUSED fm_confirm_collection — the mirror boundary holds (${qaHands.status})`);
 
   // ---------------------------------------------------------------------------
   // 7. The Initial-QA rejection reaches the order taker's Returns board (0054)
@@ -497,8 +564,14 @@ function bail(why) {
     const qaComplete = await rpc('qa', 'ot_complete_qa_return', { p_damage_id: rejection.damage_id });
     chk(qaComplete.status >= 400, `  QA is refused on Complete return (${qaComplete.status})`);
 
-    // The press itself.
-    const done = await rpc('order', 'ot_complete_qa_return', { p_damage_id: rejection.damage_id });
+    // The press itself. The photo is required by 0059, and the Returns screen
+    // has always sent one (`completeQaReturn` takes it as a positional arg) —
+    // only this walk omitted it, so the call was refused and the four checks
+    // downstream of the piece coming back failed with it.
+    const done = await rpc('order', 'ot_complete_qa_return', {
+      p_damage_id: rejection.damage_id,
+      p_photo_url: PHOTO,
+    });
     chk(done.ok && !!done.body?.ot_return_confirmed_at,
       `COMPLETE RETURN → ${done.ok ? 'confirmed ' + done.body.ot_return_confirmed_at : done.msg}`);
 

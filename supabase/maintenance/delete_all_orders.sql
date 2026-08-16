@@ -39,9 +39,10 @@
 --
 -- WHAT IS DELIBERATELY LEFT ALONE
 -- -------------------------------
---   stock_movements and inventory balances. See the optional block at the end —
---   removing them is a bigger decision than it looks and is not part of
---   "delete the orders".
+--   stock_movements and inventory balances. Removing them is a bigger decision
+--   than it looks and is not part of "delete the orders" — see the note at the
+--   end of this file, and use reset_orders_requests_and_pos.sql if you want the
+--   balances restored as well.
 --   masters (clients, suppliers, machines, partners), profiles, module toggles.
 --
 -- Run via the session pooler, or paste whole into the Supabase SQL editor:
@@ -156,51 +157,44 @@ union all select 'KEPT: machines',    count(*) from public.machines
 
 
 -- =============================================================================
--- OPTIONAL — put stock back as well.
---
--- Deliberately NOT part of the above, and commented out, because it is a
--- different decision from "delete the orders".
+-- PUTTING STOCK BACK — use reset_orders_requests_and_pos.sql, not this file.
 --
 -- Deleting the orders does NOT give you your stock back. `stock_movements` has
 -- no foreign key to orders — ref_id is a bare uuid — so every 'issue' row
 -- survives and every balance stays reduced. That is correct on its own terms:
 -- the thread really was consumed.
 --
--- If you want the balances back for a clean test, uncomment this. It removes
--- every movement except the opening ones and then RECOMPUTES each balance from
--- what remains, so the ledger still sums to the balance. Doing only one half
--- would break the reconciliation check the stock ledger screen displays, and a
--- ledger that does not reconcile is the one thing this schema is built to make
--- impossible.
+-- This file used to carry a commented-out block for restoring the balances. It
+-- has been REMOVED rather than fixed, because running it would have destroyed
+-- the stock it claimed to restore, and a loaded gun sitting behind a `--` is
+-- one paste away from being fired.
+--
+-- What it did, and why each part was wrong (measured 2026-08-15, live DB):
+--
+--   delete from stock_movements where movement_type <> 'opening'
+--     Rested on "opening is the one movement type that is not the result of an
+--     order". False here: there is exactly 1 'opening' row covering 1 item,
+--     while 96 of the 97 inventory_items were stocked with 'manual_add' (149
+--     rows over 91 items). The keep-set has to be 'opening' AND 'manual_add'
+--     — what a store manager enters directly — with 'issue', 'grn',
+--     'audit_variance' and 'handover_return' deleted. Naming the doomed types
+--     positively also means a type added later is kept by default rather than
+--     silently swept up by a catch-all.
+--
+--   set quantity = coalesce(sum(movements), 0)
+--     Reads "no ledger rows" as "no stock". BLK-03, GLD-02 and RED-01 hold
+--     120,000 m each in both factories with no movements at all — balances that
+--     predate the ledger. The recompute zeroed all six rows.
+--
+--   the "prove it reconciles" select
+--     Would NOT have caught either bug. It left joins movements and compares
+--     the sum to the balance, so an item zeroed down from 120,000 m reconciles
+--     0 against 0 and reports 'ok'. A check that passes because both sides were
+--     destroyed together is worse than no check.
+--
+-- The replacement handles the case this one could not see: an item that never
+-- had ledger rows and an item whose rows were all just deleted are
+-- indistinguishable afterwards, but need opposite treatment. It records which
+-- items the ledger covers BEFORE deleting, and recomputes only those. It also
+-- rebuilds `balance_after`, which the Stock Ledger screen prints directly.
 -- =============================================================================
-
--- begin;
---
--- delete from public.stock_audit_items;
--- delete from public.stock_audits;
---
--- -- Keep 'opening' only: that is the one movement type that is not the result of
--- -- an order, a PO or an audit.
--- delete from public.stock_movements where movement_type <> 'opening';
---
--- -- Rebuild each balance from its surviving movements, and zero anything that
--- -- now has none.
--- update public.inventory_items ii
---    set quantity = coalesce((
---          select sum(sm.quantity_meters)
---            from public.stock_movements sm
---           where sm.thread_stock_id = ii.id
---        ), 0),
---        updated_at = now();
---
--- -- Prove it reconciles. Every row must come back 'ok'.
--- select ii.color_code, ii.item_type, ii.quantity,
---        coalesce(sum(sm.quantity_meters), 0) as ledger_sum,
---        case when abs(ii.quantity - coalesce(sum(sm.quantity_meters), 0)) < 0.01
---             then 'ok' else 'MISMATCH' end as reconciles
---   from public.inventory_items ii
---   left join public.stock_movements sm on sm.thread_stock_id = ii.id
---  group by ii.id, ii.color_code, ii.item_type, ii.quantity
---  order by reconciles desc, ii.color_code;
---
--- commit;

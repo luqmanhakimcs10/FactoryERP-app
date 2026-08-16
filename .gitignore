@@ -47,3 +47,6 @@ yarn-error.*
 
 # Screenshots from scripts/banner-shots.mjs
 .banner-shots/
+
+# Screenshots from scripts/dp-tab-shots.mjs
+.dp-shots/

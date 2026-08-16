@@ -12,6 +12,7 @@ import React, { useState } from 'react';
 import { View, Text, FlatList, Pressable, StyleSheet, ActivityIndicator } from 'react-native';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigation, useRoute } from '@react-navigation/native';
+import { Ionicons } from '@expo/vector-icons';
 import { Screen } from '../../components/ui/Screen';
 import { SegmentedTabs } from '../../components/ui/SegmentedTabs';
 import { StatCard, StatGrid } from '../../components/ui/StatGrid';
@@ -21,7 +22,11 @@ import { OrderStatusPill } from '../../components/ui/StatusPill';
 import { CollectPrompt } from '../../components/ui/CollectPrompt';
 import { PhotoPicker, type LocalPhoto } from '../../components/camera/PhotoPicker';
 import { listOrders, countOrders, startProduction } from '../../api/endpoints/orders';
-import { listPendingMaterialAcceptance, acceptInventory } from '../../api/endpoints/inventory';
+import {
+  listPendingMaterialAcceptance,
+  listMaterialIssueLines,
+  acceptInventory,
+} from '../../api/endpoints/inventory';
 import { uploadOrderPhoto } from '../../api/endpoints/storage';
 import { useAuth } from '../../auth/AuthContext';
 import { useNextStep, NEXT_STEP } from '../../components/ui/NextStepToast';
@@ -36,6 +41,7 @@ import {
   fontSize,
   fontWeight,
   fontFamily,
+  tint,
 } from '../../constants/theme';
 
 const ACTIVE_STATUSES: OrderStatus[] = [
@@ -283,40 +289,11 @@ export function OrdersBoxScreen() {
 }
 
 function AcceptInventoryTab() {
-  const queryClient = useQueryClient();
-  const { profile } = useAuth();
-  const showNextStep = useNextStep();
-  const [error, setError] = useState<string | null>(null);
-  const [capturingId, setCapturingId] = useState<string | null>(null);
-  const [photo, setPhoto] = useState<LocalPhoto[]>([]);
+  const [openId, setOpenId] = useState<string | null>(null);
 
   const { data, isLoading } = useQuery({
     queryKey: ['pendingMaterialAcceptance'],
     queryFn: listPendingMaterialAcceptance,
-  });
-
-  const acceptMutation = useMutation({
-    mutationFn: async ({ row }: { row: PendingMaterialIssueRow }) => {
-      if (!photo[0] || !profile?.factory_id) throw new Error('Take a photo of the received materials first.');
-      const path = await uploadOrderPhoto(profile.factory_id, row.order_id, photo[0].uri, 'material-accepted');
-      return acceptInventory(row.material_issue_id, path);
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['pendingMaterialAcceptance'] });
-      queryClient.invalidateQueries({ queryKey: ['floorManagerCardCounts'] });
-      queryClient.invalidateQueries({ queryKey: ['orders'] });
-      // Accepting inventory is precisely what makes an order assignable, so the
-      // Open Shift / Assign Machine picker must be refetched too. Without this
-      // the order only appears after the 30s staleTime lapses or the app is
-      // reloaded — the second half of the ALP-00098 bug.
-      queryClient.invalidateQueries({ queryKey: ['assignableOrders'] });
-      queryClient.invalidateQueries({ queryKey: ['machines'] });
-      queryClient.invalidateQueries({ queryKey: ['queueSummary'] });
-      setCapturingId(null);
-      setPhoto([]);
-      showNextStep(NEXT_STEP.inventoryAccepted);
-    },
-    onError: (e) => setError(describeDbError(e, 'Accept inventory')),
   });
 
   return (
@@ -327,7 +304,6 @@ function AcceptInventoryTab() {
         <View>
           <Text style={styles.sectionTitle}>Material ready for pickup ({data?.length ?? 0})</Text>
           {isLoading ? <ActivityIndicator color={colors.indigo} /> : null}
-          {error ? <Text style={styles.error}>{error}</Text> : null}
         </View>
       }
       ListEmptyComponent={
@@ -336,48 +312,88 @@ function AcceptInventoryTab() {
       renderItem={({ item }) => (
         <AcceptInventoryRow
           row={item}
-          capturing={capturingId === item.material_issue_id}
-          photo={capturingId === item.material_issue_id ? photo : []}
-          busy={acceptMutation.isPending && capturingId === item.material_issue_id}
-          onStartCapture={() => {
-            setError(null);
-            setPhoto([]);
-            setCapturingId(item.material_issue_id);
-          }}
-          onCancelCapture={() => {
-            setCapturingId(null);
-            setPhoto([]);
-          }}
-          onChangePhoto={setPhoto}
-          onConfirm={() => {
-            setError(null);
-            acceptMutation.mutate({ row: item });
-          }}
+          open={openId === item.material_issue_id}
+          onToggle={() =>
+            setOpenId(openId === item.material_issue_id ? null : item.material_issue_id)
+          }
+          onDone={() => setOpenId(null)}
         />
       )}
     />
   );
 }
 
+/**
+ * One material issue, received line by line. (0084, Fix 1)
+ *
+ * The old row offered a single "Accept inventory" button over a summary that
+ * read "3 colours, 412 m". Nobody can check a physical delivery against that,
+ * so in practice nobody did — the button meant "the material arrived, probably".
+ *
+ * Now every line on the issue is listed with its quantity and a checkbox, and
+ * the Floor Manager ticks each one as it is counted in. ALL lines must be
+ * ticked: `fm_accept_inventory` refuses a partial set, so the disabled button
+ * below is a courtesy, not the rule. Partial receipt is deliberately not
+ * supported — a half-accepted issue needs its own status and its own shortfall
+ * record, which is a different feature rather than a looser version of this one.
+ */
 function AcceptInventoryRow({
   row,
-  capturing,
-  photo,
-  busy,
-  onStartCapture,
-  onCancelCapture,
-  onChangePhoto,
-  onConfirm,
+  open,
+  onToggle,
+  onDone,
 }: {
   row: PendingMaterialIssueRow;
-  capturing: boolean;
-  photo: LocalPhoto[];
-  busy: boolean;
-  onStartCapture: () => void;
-  onCancelCapture: () => void;
-  onChangePhoto: (photos: LocalPhoto[]) => void;
-  onConfirm: () => void;
+  open: boolean;
+  onToggle: () => void;
+  onDone: () => void;
 }) {
+  const queryClient = useQueryClient();
+  const { profile } = useAuth();
+  const showNextStep = useNextStep();
+  const [checked, setChecked] = useState<Record<string, boolean>>({});
+  const [photo, setPhoto] = useState<LocalPhoto[]>([]);
+  const [error, setError] = useState<string | null>(null);
+
+  const { data: lines, isLoading: linesLoading } = useQuery({
+    queryKey: ['materialIssueLines', row.material_issue_id],
+    queryFn: () => listMaterialIssueLines(row.material_issue_id),
+    enabled: open,
+  });
+
+  const items = lines ?? [];
+  const tickedIds = items.filter((l) => checked[l.item_id]).map((l) => l.item_id);
+  const allTicked = items.length > 0 && tickedIds.length === items.length;
+
+  const acceptMutation = useMutation({
+    mutationFn: async () => {
+      if (!photo[0] || !profile?.factory_id) {
+        throw new Error('Take a photo of the received materials first.');
+      }
+      const path = await uploadOrderPhoto(
+        profile.factory_id, row.order_id, photo[0].uri, 'material-accepted'
+      );
+      return acceptInventory(row.material_issue_id, path, tickedIds);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['pendingMaterialAcceptance'] });
+      queryClient.invalidateQueries({ queryKey: ['floorManagerCardCounts'] });
+      queryClient.invalidateQueries({ queryKey: ['orders'] });
+      // Accepting inventory is precisely what makes an order assignable, so the
+      // Assign Machine picker must be refetched too. Without this the order only
+      // appears after the 30s staleTime lapses or the app is reloaded — the
+      // second half of the ALP-00098 bug.
+      queryClient.invalidateQueries({ queryKey: ['assignableOrders'] });
+      queryClient.invalidateQueries({ queryKey: ['machines'] });
+      queryClient.invalidateQueries({ queryKey: ['queueSummary'] });
+      setChecked({});
+      setPhoto([]);
+      onDone();
+      showNextStep(NEXT_STEP.inventoryAccepted);
+    },
+    onError: (e) => setError(describeDbError(e, 'Accept inventory')),
+  });
+
   return (
     <View style={styles.issueRow}>
       <View style={{ flex: 1 }}>
@@ -389,32 +405,88 @@ function AcceptInventoryRow({
           <Text style={styles.meta}>
             Requested by {row.issued_by_name} ·{' '}
             <Text style={styles.mono}>{Number(row.total_meters).toLocaleString()}</Text> m ·{' '}
-            {row.colors} colour{row.colors === 1 ? '' : 's'}
+            {row.colors} item{row.colors === 1 ? '' : 's'}
           </Text>
         </View>
 
-        {capturing ? (
+        {open ? (
           <View style={styles.captureBox}>
+            <Text style={styles.checklistHead}>
+              Tick each item as you physically receive it
+              {items.length ? ` — ${tickedIds.length} of ${items.length}` : ''}
+            </Text>
+
+            {linesLoading ? <ActivityIndicator color={colors.indigo} /> : null}
+
+            {items.map((line) => {
+              const on = !!checked[line.item_id];
+              return (
+                <Pressable
+                  key={line.item_id}
+                  accessibilityRole="checkbox"
+                  accessibilityState={{ checked: on }}
+                  accessibilityLabel={`${line.color_code}, ${line.issued_meters} ${line.unit}`}
+                  onPress={() => setChecked((c) => ({ ...c, [line.item_id]: !on }))}
+                  style={({ pressed }) => [
+                    styles.lineRow,
+                    on && styles.lineRowOn,
+                    pressed && { opacity: 0.8 },
+                  ]}
+                >
+                  <View style={[styles.checkbox, on && styles.checkboxOn]}>
+                    {on ? <Ionicons name="checkmark" size={15} color={colors.white} /> : null}
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.lineName}>{line.color_code}</Text>
+                    <Text style={styles.lineMeta}>{line.item_type}</Text>
+                  </View>
+                  <Text style={styles.lineQty}>
+                    {Number(line.issued_meters).toLocaleString()} {line.unit}
+                  </Text>
+                </Pressable>
+              );
+            })}
+
+            {!linesLoading && items.length === 0 ? (
+              <Text style={styles.emptyBody}>This issue has no lines to receive.</Text>
+            ) : null}
+
             <PhotoPicker
               label="Photo of received materials"
               photos={photo}
-              onChange={onChangePhoto}
+              onChange={setPhoto}
               multiple={false}
             />
+
+            {!allTicked && items.length > 0 ? (
+              <Text style={styles.gateHint}>
+                Every item has to be ticked before the receipt can be confirmed.
+              </Text>
+            ) : null}
+            {error ? <Text style={styles.error}>{error}</Text> : null}
+
             <View style={styles.captureActions}>
               <AppButton
                 title="Cancel"
                 variant="secondary"
-                onPress={onCancelCapture}
-                disabled={busy}
+                onPress={() => {
+                  setChecked({});
+                  setPhoto([]);
+                  setError(null);
+                  onToggle();
+                }}
+                disabled={acceptMutation.isPending}
                 style={{ flex: 1 }}
               />
               <AppButton
-                title="Confirm accept"
+                title={`Confirm receipt${items.length ? ` (${tickedIds.length}/${items.length})` : ''}`}
                 variant="brass"
-                onPress={onConfirm}
-                loading={busy}
-                disabled={!photo[0]}
+                onPress={() => {
+                  setError(null);
+                  acceptMutation.mutate();
+                }}
+                loading={acceptMutation.isPending}
+                disabled={!allTicked || !photo[0]}
                 style={{ flex: 1 }}
               />
             </View>
@@ -423,7 +495,7 @@ function AcceptInventoryRow({
           <AppButton
             title="Accept inventory"
             variant="brass"
-            onPress={onStartCapture}
+            onPress={onToggle}
             style={styles.acceptBtn}
           />
         )}
@@ -617,8 +689,43 @@ const styles = StyleSheet.create({
   },
   issueRowMain: { gap: 2, marginBottom: spacing.sm },
   acceptBtn: { minHeight: 40, paddingHorizontal: spacing.md, alignSelf: 'flex-start' },
-  captureBox: { marginTop: spacing.sm },
+  captureBox: { marginTop: spacing.sm, gap: spacing.sm },
   captureActions: { flexDirection: 'row', gap: spacing.md },
+  // ---- Itemised receipt checklist (0084) ----
+  checklistHead: {
+    fontSize: fontSize.caption,
+    fontWeight: fontWeight.semibold,
+    color: colors.indigoDeep,
+  },
+  lineRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.md,
+    paddingVertical: spacing.sm,
+    paddingHorizontal: spacing.md,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.surface,
+    // Comfortably past the 44pt touch minimum: this is tapped with gloves on,
+    // standing next to a trolley, once per line.
+    minHeight: 52,
+  },
+  lineRowOn: { borderColor: colors.success, backgroundColor: tint(colors.success, 0.08) },
+  checkbox: {
+    width: 24,
+    height: 24,
+    borderRadius: 6,
+    borderWidth: 2,
+    borderColor: colors.slate,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  checkboxOn: { borderColor: colors.success, backgroundColor: colors.success },
+  lineName: { fontSize: fontSize.secondary, fontWeight: fontWeight.medium, color: colors.indigoDeep },
+  lineMeta: { fontSize: fontSize.caption, color: colors.slate, textTransform: 'capitalize' },
+  lineQty: { fontFamily: fontFamily.mono, fontSize: fontSize.secondary, color: colors.indigoDeep },
+  gateHint: { fontSize: fontSize.caption, color: colors.slate, lineHeight: 18 },
   footer: { marginTop: spacing.xl },
 });
 

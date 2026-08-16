@@ -1,33 +1,44 @@
 /**
- * Delivery Person — ONE tab: Orders. (Fix 1)
+ * Delivery Person — THREE tabs: Collection, Delivery, Pickup. (0084, Fix 5)
  *
- * This replaces the Handoff / Return / SLA three-tab split. All four legs of
- * this role's work are the same job seen at different moments, so they are one
- * list here, and each row offers exactly the action its status permits:
+ * WHAT THIS REPLACES
+ * A single "Orders" list holding all four legs at once, with the action derived
+ * from each row's status. That was an improvement on the Handoff/Return/SLA
+ * split it replaced, but it flattened a round trip into a heap: a piece being
+ * carried out and a piece being fetched back look identical in it, and the one
+ * question this role actually asks — "what am I picking up right now?" — had no
+ * answer short of reading every pill.
  *
- *   To Collect        -> Collect (photo)      [from the Floor Manager]
- *   Delivery waiting  -> pick handler, then Handover to finishing partner
- *   Out at Partner    -> Collect (photo)      [back from the partner]
- *   Collected         -> Hand back to Floor Manager
+ * The three tabs are the three physical journeys, in order:
  *
- * The action is derived from `current_status` alone rather than from local
- * state, so a row that someone else advanced simply re-renders with its new
- * action on the next refetch instead of offering a button that will be refused.
+ *   Collection  Pieces the Floor Manager handed to ME. Collect (photo) — the
+ *               piece is now in my hands.
+ *   Delivery    Pieces I am carrying out to a finishing partner. Handover
+ *               (photo) — custody passes to them and the SLA clock starts.
+ *   Pickup      The return leg. Collect back from the partner (photo), then
+ *               return it to the Floor Manager, who puts it through Stage QA.
  *
- * SLA-breached rows sort to the top and carry an alert pill — the old separate
- * "SLA Alerts" tab existed only because the queue could not show urgency
- * inline, which a single sorted list can.
+ * WHICH TAB A ROW SITS IN IS DECIDED IN SQL, not here — `dp_orders_queue`
+ * returns it. Which tab a status belongs to is part of the workflow definition,
+ * and a client that works it out for itself can file a piece under a tab whose
+ * action the database will then refuse.
  *
- * Order within the list (set by `dp_orders_queue`, 0062): breached first, then
- * pieces a finishing partner has marked finished, then NEWEST FIRST. New work
- * used to land at the bottom, which is the one place nobody looks.
+ * THE PARTNER IS NO LONGER CHOSEN HERE. The Floor Manager names both the
+ * delivery person and the finishing partner when they hand over (Fix 4), so the
+ * Delivery tab shows the destination rather than asking for it. The one
+ * exception is a piece handed over by a pre-0084 client, which carries no
+ * partner; those — and only those — still get a picker.
+ *
+ * SLA-breached rows sort to the top of whichever tab they are in and carry an
+ * alert pill.
  */
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { View, Text, FlatList, StyleSheet, Pressable, RefreshControl } from 'react-native';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Ionicons } from '@expo/vector-icons';
 import { Screen } from '../../components/ui/Screen';
 import { DashboardHeader } from '../../components/ui/DashboardHeader';
+import { SegmentedTabs } from '../../components/ui/SegmentedTabs';
 import { TaskBanners } from '../../components/ui/TaskBanners';
 import { AppButton } from '../../components/ui/AppButton';
 import { StatusPill, RepeatStatusPill } from '../../components/ui/StatusPill';
@@ -42,10 +53,11 @@ import { describeDbError } from '../../utils/errors';
 import {
   listDeliveryOrders,
   collectFromFloor,
-  sendToPartner,
+  handoverToPartner,
   collectFromPartner,
   handBackToFloor,
   type DpOrderRow,
+  type DeliveryTab,
 } from '../../api/endpoints/stageHandover';
 import {
   colors,
@@ -65,24 +77,73 @@ function stageLabel(stage: string | null | undefined) {
   return words.charAt(0).toUpperCase() + words.slice(1);
 }
 
-export function DeliveryOrdersScreen({ navigation }: any) {
+const TAB_COPY: Record<DeliveryTab, { title: string; blurb: string; empty: string }> = {
+  collection: {
+    title: 'Collection',
+    blurb: 'Handed to you by the Floor Manager. Photograph each piece as you take it.',
+    empty: 'Pieces appear here the moment a Floor Manager hands one to you.',
+  },
+  delivery: {
+    title: 'Delivery',
+    blurb: 'In your hands, on the way to a finishing partner.',
+    empty: 'Anything you collect from the floor lands here, ready to go out.',
+  },
+  pickup: {
+    title: 'Pickup',
+    blurb: 'Out at a partner, or collected back and due at the floor.',
+    empty: 'Pieces appear here once they are with a partner and on their way back.',
+  },
+};
+
+export function DeliveryOrdersScreen({ navigation, route }: any) {
   const [search, setSearch] = useState('');
+  // A task banner deep-links to the tab that actually holds its rows, the same
+  // way the Floor Manager's accept-inventory banner opens its tab. This
+  // initialiser covers the cold case — the screen mounting with a tab already
+  // named on the route...
+  const [tab, setTab] = useState<DeliveryTab>(
+    (route?.params?.tab as DeliveryTab) ?? 'collection'
+  );
   const [openId, setOpenId] = useState<string | null>(null);
+
+  // ...but the initialiser alone is why the banner was a dead click.
+  //
+  // Every OTHER role's banner opens a DIFFERENT screen (TaskQueue, OrdersBox,
+  // StageTracking), which mounts fresh and reads its params on the way up. This
+  // role's banners are rendered BY this screen and point back at it: RoleHome
+  // *is* DeliveryOrdersScreen. So `navigate('RoleHome', { tab: 'delivery' })`
+  // targets the route that is already mounted and focused — React Navigation
+  // updates `route.params` and stops there. No remount, so the useState
+  // initialiser above never runs again and the tab never moved. The tap was
+  // firing and navigating correctly the whole time; it simply had nowhere new
+  // to go, which is exactly what "nothing happens" looks like.
+  //
+  // The param is CONSUMED once applied. Without that, a second tap on the same
+  // banner writes the same value, the dependency below never changes, the
+  // effect never re-runs, and the banner is dead again the moment the user
+  // switches tab by hand.
+  useEffect(() => {
+    const wanted = route?.params?.tab as DeliveryTab | undefined;
+    if (!wanted) return;
+    setTab(wanted);
+    setOpenId(null);
+    navigation.setParams({ tab: undefined });
+  }, [route?.params?.tab, navigation]);
 
   const { data, isLoading, refetch, isRefetching } = useQuery({
     queryKey: ['dpOrders'],
     queryFn: listDeliveryOrders,
   });
 
-  // The final handover to the client. It belongs in THIS list rather than a tab
-  // of its own — the brief allows exactly one tab, and an order that has
-  // cleared every stage is still this role's work, just the last leg of it.
+  // The final handover to the CLIENT. It is not one of the three stage-loop
+  // journeys, so it is not a tab; it sits under Delivery, which is the tab whose
+  // meaning it shares — a piece leaving this building for somewhere else.
   const { data: finalDeliveries } = useQuery({
     queryKey: ['dpFinalDelivery'],
     queryFn: listFinalDeliveryQueue,
   });
 
-  const rows = (data ?? []).filter((r) => {
+  const matches = (r: DpOrderRow) => {
     const q = search.trim().toLowerCase();
     if (!q) return true;
     return (
@@ -90,11 +151,20 @@ export function DeliveryOrdersScreen({ navigation }: any) {
       (r.order_code ?? '').toLowerCase().includes(q) ||
       (r.vendor_name ?? '').toLowerCase().includes(q) ||
       (r.stage_type ?? '').toLowerCase().includes(q) ||
+      (r.destination_stage ?? '').toLowerCase().includes(q) ||
       (r.partner_name ?? '').toLowerCase().includes(q)
     );
-  });
+  };
 
+  const all = (data ?? []).filter(matches);
+  const counts: Record<DeliveryTab, number> = {
+    collection: all.filter((r) => r.tab === 'collection').length,
+    delivery: all.filter((r) => r.tab === 'delivery').length,
+    pickup: all.filter((r) => r.tab === 'pickup').length,
+  };
+  const rows = all.filter((r) => r.tab === tab);
   const breached = rows.filter((r) => r.sla_breached).length;
+  const showFinal = tab === 'delivery' && (finalDeliveries?.length ?? 0) > 0;
 
   return (
     <Screen padded={false}>
@@ -104,13 +174,24 @@ export function DeliveryOrdersScreen({ navigation }: any) {
         searchPlaceholder="Repeat, order, vendor, stage…"
         navigation={navigation}
       />
-      {/* One tab. Rendered as a header rather than a tab bar precisely because
-          there is nothing to switch to — a lone tab that cannot be left is a
-          control that lies about having options. */}
+
+      <View style={styles.tabsWrap}>
+        <SegmentedTabs
+          value={tab}
+          onChange={(k) => {
+            setTab(k as DeliveryTab);
+            setOpenId(null);
+          }}
+          tabs={(['collection', 'delivery', 'pickup'] as DeliveryTab[]).map((k) => ({
+            key: k,
+            label: `${TAB_COPY[k].title}${counts[k] ? ` (${counts[k]})` : ''}`,
+          }))}
+        />
+      </View>
+
       <View style={styles.head}>
-        <Text style={styles.title}>Orders</Text>
         <Text style={styles.sub}>
-          {rows.length} item{rows.length === 1 ? '' : 's'} to move
+          {TAB_COPY[tab].blurb}
           {breached > 0 ? ` · ${breached} past SLA` : ''}
         </Text>
         <View style={styles.stitch} />
@@ -136,11 +217,11 @@ export function DeliveryOrdersScreen({ navigation }: any) {
             <RefreshControl refreshing={isRefetching} onRefresh={refetch} tintColor={colors.primary} />
           }
           ListEmptyComponent={
-            (finalDeliveries?.length ?? 0) === 0 ? (
+            !showFinal ? (
               <EmptyState
                 icon="cube-outline"
-                title="Nothing to move right now"
-                message="Pieces appear here the moment a Floor Manager hands a stage over, and stay until you've handed them back."
+                title={`Nothing in ${TAB_COPY[tab].title.toLowerCase()}`}
+                message={TAB_COPY[tab].empty}
               />
             ) : null
           }
@@ -152,7 +233,7 @@ export function DeliveryOrdersScreen({ navigation }: any) {
             />
           )}
           ListFooterComponent={
-            (finalDeliveries?.length ?? 0) > 0 ? (
+            showFinal ? (
               <View style={styles.footer}>
                 <Text style={styles.sectionTitle}>Ready for final delivery</Text>
                 <Text style={styles.sectionSub}>
@@ -201,13 +282,16 @@ function DeliveryCard({
   const [partnerId, setPartnerId] = useState<string | null>(row.partner_id);
   const [error, setError] = useState<string | null>(null);
 
-  const needsPhoto = row.current_status === 'awaiting_dp_collection' || row.current_status === 'handed_off';
-  const needsPartner = row.current_status === 'handed_over';
+  // Every leg but the last one is a physical custody change, and every physical
+  // custody change in this app leaves a photo.
+  const needsPhoto = row.current_status !== 'returned_to_delivery';
+  // Only a piece handed over before 0084 arrives with no partner set.
+  const needsPartnerPick = row.current_status === 'handed_over' && !row.partner_id;
 
   const { data: partners, isLoading: partnersLoading } = useQuery({
-    queryKey: ['finishingPartnerOptions'],
+    queryKey: ['finishingPartnerOptions', 'any'],
     queryFn: () => listLinkedOptions('finishing_partners', 'name'),
-    enabled: needsPartner && expanded,
+    enabled: needsPartnerPick && expanded,
   });
 
   function done() {
@@ -228,11 +312,10 @@ function DeliveryCard({
       // upload must surface as an upload error, not as a confusing DB refusal.
       if (needsPhoto) {
         const url = await uploadOrderPhoto(profile?.factory_id ?? '', row.order_id, photo[0].uri);
-        return row.current_status === 'awaiting_dp_collection'
-          ? collectFromFloor(row.repeat_id, url)
-          : collectFromPartner(row.repeat_id, url);
+        if (row.current_status === 'awaiting_dp_collection') return collectFromFloor(row.repeat_id, url);
+        if (row.current_status === 'handed_over') return handoverToPartner(row.repeat_id, url, partnerId);
+        return collectFromPartner(row.repeat_id, url);
       }
-      if (needsPartner) return sendToPartner(row.repeat_id, partnerId!);
       return handBackToFloor(row.repeat_id);
     },
     onSuccess: done,
@@ -241,14 +324,23 @@ function DeliveryCard({
 
   const actionLabel =
     row.current_status === 'awaiting_dp_collection'
-      ? 'Collect'
+      ? 'Collect from Floor Manager'
       : row.current_status === 'handed_over'
-        ? 'Handover to finishing partner'
+        ? `Handover to ${row.partner_name ?? 'finishing partner'}`
         : row.current_status === 'handed_off'
-          ? 'Collect'
-          : 'Hand back to Floor Manager';
+          ? `Collect from ${row.partner_name ?? 'partner'}`
+          : 'Return to Floor Manager';
 
-  const canAct = needsPhoto ? photo.length > 0 : needsPartner ? !!partnerId : true;
+  const photoLabel =
+    row.current_status === 'awaiting_dp_collection'
+      ? 'Photo of the piece as collected from the Floor Manager'
+      : row.current_status === 'handed_over'
+        ? `Photo of the piece as handed to ${row.partner_name ?? 'the partner'}`
+        : `Photo of the piece as collected back from ${row.partner_name ?? 'the partner'}`;
+
+  const canAct = needsPhoto
+    ? photo.length > 0 && (!needsPartnerPick || !!partnerId)
+    : true;
 
   return (
     <View style={[styles.card, row.sla_breached && styles.cardBreached]}>
@@ -260,8 +352,11 @@ function DeliveryCard({
           </Text>
           <Text style={styles.meta}>
             Stage {row.stage_sequence ?? '—'} of {row.total_stages} · {stageLabel(row.stage_type)}
-            {row.partner_name ? ` · ${row.partner_name}` : ''}
+            {row.destination_stage ? ` → ${stageLabel(row.destination_stage)}` : ''}
           </Text>
+          {row.partner_name ? (
+            <Text style={styles.meta}>Partner: {row.partner_name}</Text>
+          ) : null}
           <View style={styles.pills}>
             <RepeatStatusPill status={row.current_status} perspective="delivery" />
             {row.sla_breached ? <StatusPill label="SLA breached" color={colors.alert} /> : null}
@@ -285,11 +380,7 @@ function DeliveryCard({
         <View style={styles.body}>
           {needsPhoto ? (
             <PhotoPicker
-              label={
-                row.current_status === 'awaiting_dp_collection'
-                  ? 'Photo of the piece as collected from the Floor Manager'
-                  : `Photo of the piece as collected back from ${row.partner_name ?? 'the partner'}`
-              }
+              label={photoLabel}
               hint="Required — this is the proof of physical custody."
               photos={photo}
               onChange={setPhoto}
@@ -298,22 +389,29 @@ function DeliveryCard({
             />
           ) : null}
 
-          {needsPartner ? (
-            <SelectField
-              label={`${stageLabel(row.stage_type)} person select`}
-              value={partnerId}
-              onChange={setPartnerId}
-              options={partners ?? []}
-              loading={partnersLoading}
-              required
-              emptyHint="No finishing partners on file yet — add one under Master data."
-            />
+          {needsPartnerPick ? (
+            <>
+              <Text style={styles.note}>
+                This piece was handed over before the Floor Manager began naming the partner, so
+                there is no destination on it. Pick one to send it out.
+              </Text>
+              <SelectField
+                label="Finishing partner"
+                value={partnerId}
+                onChange={setPartnerId}
+                options={partners ?? []}
+                loading={partnersLoading}
+                required
+                emptyHint="No finishing partners on file yet — add one under Master data."
+              />
+            </>
           ) : null}
 
           {row.current_status === 'returned_to_delivery' ? (
             <Text style={styles.note}>
-              Handing back prompts the Floor Manager to confirm they have collected{' '}
-              {stageLabel(row.stage_type).toLowerCase()}. The next stage starts as soon as they do.
+              Returning prompts the Floor Manager to confirm they have the piece. It then goes
+              through Stage QA for the {stageLabel(row.stage_type).toLowerCase()} work before it
+              moves on.
             </Text>
           ) : null}
 
@@ -348,9 +446,9 @@ function DeliveryCard({
 }
 
 const styles = StyleSheet.create({
-  head: { paddingHorizontal: spacing.lg, paddingTop: spacing.lg },
-  title: { fontSize: fontSize.title, fontWeight: fontWeight.semibold, color: colors.indigoDeep },
-  sub: { marginTop: 2, fontSize: fontSize.secondary, color: colors.slate },
+  tabsWrap: { paddingTop: spacing.md },
+  head: { paddingHorizontal: spacing.lg, paddingTop: spacing.md },
+  sub: { fontSize: fontSize.secondary, color: colors.slate, lineHeight: 20 },
   // The stitch line: the app's running motif for "a seam between steps".
   stitch: {
     marginTop: spacing.md,

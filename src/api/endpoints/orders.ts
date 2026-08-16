@@ -480,8 +480,16 @@ export async function sendToStageQa(repeatId: string): Promise<Repeat> {
   return data as Repeat;
 }
 
-export async function passStageQa(repeatId: string): Promise<Repeat> {
-  const { data, error } = await supabase.rpc('qa_pass_stage_qa', { p_repeat_id: repeatId });
+/**
+ * Pass Stage QA. The photo is required by the database, not just by the button:
+ * every other inspection in this app leaves an image of what was approved, and
+ * this was the one that did not (0084).
+ */
+export async function passStageQa(repeatId: string, photoUrl: string): Promise<Repeat> {
+  const { data, error } = await supabase.rpc('qa_pass_stage_qa', {
+    p_repeat_id: repeatId,
+    p_photo_url: photoUrl,
+  });
   if (error) throw error;
   return data as Repeat;
 }

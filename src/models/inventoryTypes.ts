@@ -143,6 +143,23 @@ export interface MaterialIssue {
   }[];
 }
 
+/**
+ * One line on a material issue, as the Floor Manager ticks it off (0084).
+ *
+ * `item_type` and `unit` come from the `inventory_items` row the line draws on,
+ * not from the issue — one definition of what a colour code IS, so a line can
+ * never describe its stock item differently from the stock screen.
+ */
+export interface MaterialIssueLine {
+  item_id: string;
+  color_code: string;
+  item_type: string;
+  unit: string;
+  required_meters: number;
+  issued_meters: number;
+  received_at: string | null;
+}
+
 /** A material issue not yet accepted by the floor manager — the pickup queue. */
 export interface PendingMaterialIssueRow {
   material_issue_id: string;

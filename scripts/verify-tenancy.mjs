@@ -847,24 +847,50 @@ const EXPECTED_ROLE = {
       { p_color_code: 'RED-01', p_quantity: -99999999, p_movement_type: 'issue' });
     chk(drain.status >= 400, `stock cannot be driven negative -> HTTP ${drain.status}`);
 
-    console.log('\n=== 30b. Floor manager: accept inventory requires a photo (0040) ===');
-    const noPhoto = await rpc('fm_accept_inventory', A.fm, { p_material_issue_id: issueId, p_photo_url: null });
+    console.log('\n=== 30b. Floor manager: accept inventory — photo AND every line ticked (0040/0084) ===');
+    // 0084: acceptance is itemised. The lines are what the FM ticks off against
+    // the physical delivery, and the database refuses a partial set.
+    const mLines = await rpc('fm_material_issue_lines', A.fm, { p_material_issue_id: issueId });
+    chk(mLines.status === 200 && (mLines.body ?? []).length > 0,
+      `fm_material_issue_lines -> ${(mLines.body ?? []).length} line(s) to receive`);
+    chk((mLines.body ?? []).every((l) => l.received_at === null), 'no line is ticked before acceptance');
+    chk((await rpc('fm_material_issue_lines', B.fm, { p_material_issue_id: issueId })).status >= 400,
+      "Beta FM cannot read Alpha's material issue lines");
+    const ALL_IDS = (mLines.body ?? []).map((l) => l.item_id);
+
+    const noPhoto = await rpc('fm_accept_inventory', A.fm,
+      { p_material_issue_id: issueId, p_photo_url: null, p_received_item_ids: ALL_IDS });
     chk(noPhoto.status >= 400, `accepting with no photo is refused -> HTTP ${noPhoto.status}`);
-    const emptyPhoto = await rpc('fm_accept_inventory', A.fm, { p_material_issue_id: issueId, p_photo_url: '  ' });
+    const emptyPhoto = await rpc('fm_accept_inventory', A.fm,
+      { p_material_issue_id: issueId, p_photo_url: '  ', p_received_item_ids: ALL_IDS });
     chk(emptyPhoto.status >= 400, `accepting with a blank photo is refused -> HTTP ${emptyPhoto.status}`);
+    const nothingTicked = await rpc('fm_accept_inventory', A.fm,
+      { p_material_issue_id: issueId, p_photo_url: 'x.jpg', p_received_item_ids: [] });
+    chk(nothingTicked.status >= 400, `accepting with no line ticked is refused -> HTTP ${nothingTicked.status}`);
+    const alienLine = await rpc('fm_accept_inventory', A.fm,
+      { p_material_issue_id: issueId, p_photo_url: 'x.jpg', p_received_item_ids: ['00000000-0000-0000-0000-000000000000'] });
+    chk(alienLine.status >= 400, 'a line id from another issue is refused');
 
     // Role/tenant: only this factory's floor manager can accept it.
-    chk((await rpc('fm_accept_inventory', A.qa, { p_material_issue_id: issueId, p_photo_url: 'x.jpg' })).status >= 400,
+    chk((await rpc('fm_accept_inventory', A.qa,
+      { p_material_issue_id: issueId, p_photo_url: 'x.jpg', p_received_item_ids: ALL_IDS })).status >= 400,
       'QA is refused on fm_accept_inventory');
-    chk((await rpc('fm_accept_inventory', B.fm, { p_material_issue_id: issueId, p_photo_url: 'x.jpg' })).status >= 400,
+    chk((await rpc('fm_accept_inventory', B.fm,
+      { p_material_issue_id: issueId, p_photo_url: 'x.jpg', p_received_item_ids: ALL_IDS })).status >= 400,
       "Beta FM is refused on Alpha's material issue");
 
-    const accepted = await rpc('fm_accept_inventory', A.fm,
-      { p_material_issue_id: issueId, p_photo_url: `${ALPHA}/${jcRow.order_id}/material-accepted-probe.jpg` });
+    const accepted = await rpc('fm_accept_inventory', A.fm, {
+      p_material_issue_id: issueId,
+      p_photo_url: `${ALPHA}/${jcRow.order_id}/material-accepted-probe.jpg`,
+      p_received_item_ids: ALL_IDS,
+    });
     chk(accepted.status === 200 && !!accepted.body?.accepted_photo_url,
-      `accept with a photo succeeds -> HTTP ${accepted.status}, accepted_photo_url set`);
+      `accept with a photo and every line ticked succeeds -> HTTP ${accepted.status}, accepted_photo_url set`);
+    const tickedNow = await rpc('fm_material_issue_lines', A.fm, { p_material_issue_id: issueId });
+    chk((tickedNow.body ?? []).every((l) => l.received_at !== null), 'every line records when it was received');
 
-    chk((await rpc('fm_accept_inventory', A.fm, { p_material_issue_id: issueId, p_photo_url: 'x.jpg' })).status >= 400,
+    chk((await rpc('fm_accept_inventory', A.fm,
+      { p_material_issue_id: issueId, p_photo_url: 'x.jpg', p_received_item_ids: ALL_IDS })).status >= 400,
       'accepting the same material issue twice is refused');
   }
 
@@ -1171,31 +1197,64 @@ const EXPECTED_ROLE = {
 
         if (walk) {
           // Role gates, exercised once each on the walked repeat before it moves.
-          chk((await rpc('qa_pass_stage_qa', A.fm, { p_repeat_id: walk.id })).status >= 400,
+          chk((await rpc('qa_pass_stage_qa', A.fm, { p_repeat_id: walk.id, p_photo_url: 'alpha/x.jpg' })).status >= 400,
             'FM is refused on qa_pass_stage_qa (wrong state AND wrong role, but must still be refused)');
           chk((await rpc('fm_send_to_stage_qa', A.qa, { p_repeat_id: walk.id })).status >= 400,
             'QA is refused on fm_send_to_stage_qa');
           chk((await rpc('fm_start_stage', A.fm, { p_repeat_id: walk.id })).status === 404,
             'fm_start_stage is dropped, not merely unused (0056)');
 
-          // The stage partner the delivery leg needs.
-          const fpRow = await q('finishing_partners?select=id,name&deleted_at=is.null&limit=1', A.fm);
-          const partnerId = fpRow.body?.[0]?.id;
+          // The delivery leg needs a courier AND a handler who does the stage
+          // the piece is going TO (0084) — a mismatch is refused by the DB.
+          const fpRow = await q('finishing_partners?select=id,name,stage_type&deleted_at=is.null', A.fm);
+          const fpAll = fpRow.body ?? [];
+          const partnerId = fpAll[0]?.id;
+          const vtStages = (await q(
+            `order_stages?select=sequence,stage_type&order_id=eq.${alphaRun.orderId}&order=sequence`, A.fm)).body ?? [];
+          const courierId = ((await rpc('fm_delivery_people', A.fm, {})).body ?? [])[0]?.id ?? null;
+          const handlerForStage = (destSeq) => {
+            const want = vtStages.find((x) => x.sequence === destSeq)?.stage_type;
+            return (fpAll.find((x) => x.stage_type === want) ?? fpAll[0])?.id ?? null;
+          };
 
           // Full walk through all 3 configured stages, each one now making the
           // complete round trip out through the delivery person and back.
-          for (let stage = 1; stage <= 3; stage++) {
-            const sentQa = await rpc('fm_send_to_stage_qa', A.fm, { p_repeat_id: walk.id });
-            chk(sentQa.status === 200 && sentQa.body?.current_status === 'stage_qa',
-              `stage ${stage}: In Progress -> Go to QA -> ${sentQa.body?.current_status}`);
+          const TOTAL = vtStages.length || 3;
+          for (let stage = 1; stage <= TOTAL; stage++) {
+            // Stage 1 arrives at in_progress; every later stage arrives already
+            // at stage_qa, because 0084 inspects a partner's work on return
+            // rather than reopening the stage as fresh floor work.
+            const nowAt = (await q(`repeats?id=eq.${walk.id}&select=current_status`, A.fm)).body?.[0]?.current_status;
+            if (nowAt === 'in_progress') {
+              const sentQa = await rpc('fm_send_to_stage_qa', A.fm, { p_repeat_id: walk.id });
+              chk(sentQa.status === 200 && sentQa.body?.current_status === 'stage_qa',
+                `stage ${stage}: In Progress -> Go to QA -> ${sentQa.body?.current_status}`);
+            }
 
-            const passed = await rpc('qa_pass_stage_qa', A.qa, { p_repeat_id: walk.id });
+            // 0084: the photo is required by the database, not just the button.
+            chk((await rpc('qa_pass_stage_qa', A.qa, { p_repeat_id: walk.id, p_photo_url: '' })).status >= 400,
+              `stage ${stage}: Pass QA without a photo is refused`);
+            const passed = await rpc('qa_pass_stage_qa', A.qa,
+              { p_repeat_id: walk.id, p_photo_url: `alpha/vt-qa-${stage}.jpg` });
+
+            if (stage >= TOTAL) {
+              // The last stage has nowhere to be handed over to, so it goes
+              // straight to Final QA instead of out on a courier trip (0084).
+              chk(passed.status === 200 && passed.body?.current_status === 'awaiting_final_qa',
+                `stage ${stage} (last): Stage QA pass -> ${passed.body?.current_status}, no delivery leg`);
+              break;
+            }
+
             chk(passed.status === 200 && passed.body?.current_status === 'handover_for_delivery',
               `stage ${stage}: Stage QA pass -> ${passed.body?.current_status}`);
 
-            const handed = await rpc('fm_hand_over_stage', A.fm, { p_repeat_id: walk.id });
+            chk((await rpc('fm_hand_over_stage', A.fm, { p_repeat_id: walk.id })).status >= 400,
+              `stage ${stage}: a hand-over naming no courier is refused`);
+            const handed = await rpc('fm_hand_over_stage', A.fm, {
+              p_repeat_id: walk.id, p_delivery_id: courierId, p_partner_id: handlerForStage(stage + 1),
+            });
             chk(handed.status === 200 && handed.body?.current_status === 'awaiting_dp_collection',
-              `stage ${stage}: Hand over -> ${handed.body?.current_status}`);
+              `stage ${stage}: Handover naming courier + handler -> ${handed.body?.current_status}`);
 
             chk((await rpc('dp_collect_from_floor', A.dp, { p_repeat_id: walk.id, p_photo_url: '' })).status >= 400,
               `stage ${stage}: Collect without a photo is refused`);
@@ -1204,9 +1263,12 @@ const EXPECTED_ROLE = {
             chk(got.status === 200 && got.body?.current_status === 'handed_over',
               `stage ${stage}: Collect (photo) -> ${got.body?.current_status}`);
 
-            const out = await rpc('dp_send_to_partner', A.dp, { p_repeat_id: walk.id, p_partner_id: partnerId });
+            chk((await rpc('dp_handover_to_partner', A.dp, { p_repeat_id: walk.id, p_photo_url: '' })).status >= 400,
+              `stage ${stage}: Handover to the partner without a photo is refused`);
+            const out = await rpc('dp_handover_to_partner', A.dp,
+              { p_repeat_id: walk.id, p_photo_url: `alpha/vt-out-${stage}.jpg` });
             chk(out.status === 200 && out.body?.current_status === 'handed_off',
-              `stage ${stage}: Handover to finishing partner -> ${out.body?.current_status}`);
+              `stage ${stage}: Handover to finishing partner (photo) -> ${out.body?.current_status}`);
 
             const back = await rpc('dp_collect_from_partner', A.dp,
               { p_repeat_id: walk.id, p_photo_url: `alpha/vt-back-${stage}.jpg` });
@@ -1220,14 +1282,20 @@ const EXPECTED_ROLE = {
             chk((await rpc('fm_confirm_collection', A.dp, { p_repeat_id: walk.id })).status >= 400,
               `stage ${stage}: delivery is refused on the FM's collection confirmation`);
             const collected = await rpc('fm_confirm_collection', A.fm, { p_repeat_id: walk.id });
-            const expectedNext = stage < 3 ? 'in_progress' : 'awaiting_final_qa';
-            chk(collected.status === 200 && collected.body?.current_status === expectedNext,
-              `stage ${stage}: FM Collect -> ${collected.body?.current_status} (expected ${expectedNext})`);
-            if (stage < 3) {
-              chk(collected.body?.current_stage_index === stage + 1,
-                `stage ${stage}: next stage ${collected.body?.current_stage_index} opened automatically`);
-            }
+            // 0084, Fix 6: what comes back from a partner is INSPECTED before it
+            // advances, so collection opens the next stage at stage_qa.
+            chk(collected.status === 200 && collected.body?.current_status === 'stage_qa',
+              `stage ${stage}: FM Collect -> ${collected.body?.current_status} (the partner's work goes to Stage QA)`);
+            chk(collected.body?.current_stage_index === stage + 1,
+              `stage ${stage}: next stage ${collected.body?.current_stage_index} opened automatically`);
           }
+
+          // Fix 7: the whole journey reads back in one call, names resolved.
+          const vtJourney = await rpc('fm_order_journey', A.fm, { p_order_id: alphaRun.orderId });
+          chk(vtJourney.status === 200 && (vtJourney.body ?? []).some((e) => e.repeat_id === walk.id),
+            `fm_order_journey -> ${(vtJourney.body ?? []).length} event(s) across the order`);
+          chk((await rpc('fm_order_journey', B.fm, { p_order_id: alphaRun.orderId })).status >= 400,
+            "Beta FM cannot read Alpha's order journey");
 
           // The two final gates.
           const fmFinal = await rpc('fm_final_qa_pass', A.fm, { p_repeat_id: walk.id });
@@ -1858,11 +1926,15 @@ const EXPECTED_ROLE = {
     if (spare && partnerId) {
       const step = {
         in_progress: () => rpc('fm_send_to_stage_qa', A.fm, { p_repeat_id: spare.id }),
-        stage_qa: () => rpc('qa_pass_stage_qa', A.qa, { p_repeat_id: spare.id }),
-        handover_for_delivery: () => rpc('fm_hand_over_stage', A.fm, { p_repeat_id: spare.id }),
+        stage_qa: () => rpc('qa_pass_stage_qa', A.qa, { p_repeat_id: spare.id, p_photo_url: 'alpha/handoff/test.jpg' }),
+        handover_for_delivery: async () => rpc('fm_hand_over_stage', A.fm, {
+          p_repeat_id: spare.id,
+          p_delivery_id: ((await rpc('fm_delivery_people', A.fm, {})).body ?? [])[0]?.id ?? null,
+          p_partner_id: partnerId,
+        }),
         awaiting_dp_collection: () =>
           rpc('dp_collect_from_floor', A.dp, { p_repeat_id: spare.id, p_photo_url: 'alpha/handoff/test.jpg' }),
-        handed_over: () => rpc('dp_send_to_partner', A.dp, { p_repeat_id: spare.id, p_partner_id: partnerId }),
+        handed_over: () => rpc('dp_handover_to_partner', A.dp, { p_repeat_id: spare.id, p_photo_url: 'alpha/handoff/test.jpg' }),
       };
       let cur = spare.current_status;
       for (let i = 0; i < 8 && cur !== 'handed_off'; i++) {

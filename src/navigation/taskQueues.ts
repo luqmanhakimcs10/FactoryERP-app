@@ -133,8 +133,8 @@ export function routeForItem(queueKey: string, item: QueueItem): QueueRoute | nu
       return { screen: 'FinalPassQueue' };
 
     // ---- Delivery ----
-    // Every leg is actioned inline on the one Orders list this role has, so
-    // there is no per-item screen to open.
+    // Every leg is actioned inline on the row itself, in whichever of the three
+    // tabs holds it (0084), so there is no per-item screen to open.
     case 'dp_collect':
     case 'dp_send':
     case 'dp_pickup':
@@ -182,12 +182,19 @@ export function routeForItem(queueKey: string, item: QueueItem): QueueRoute | nu
  */
 export function routeForBanner(queueKey: string): QueueRoute {
   switch (queueKey) {
+    // Each delivery queue is one of the three tabs (0084), so the banner opens
+    // the tab that actually holds its rows rather than dropping the user on
+    // whichever tab happens to be selected.
     case 'dp_collect':
+      return { screen: 'RoleHome', params: { tab: 'collection' } };
     case 'dp_send':
+      return { screen: 'RoleHome', params: { tab: 'delivery' } };
     case 'dp_pickup':
     case 'dp_handback':
+      return { screen: 'RoleHome', params: { tab: 'pickup' } };
+    // The final client delivery is a section at the foot of the Delivery tab.
     case 'dp_final_delivery':
-      return { screen: 'RoleHome' };
+      return { screen: 'RoleHome', params: { tab: 'delivery' } };
     case 'partner_active':
       return { screen: 'RoleHome' };
     case 'accept_inventory':

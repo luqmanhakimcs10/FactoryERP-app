@@ -140,23 +140,33 @@ console.log('\n--- floor manager: banner -> list -> job card builder ---');
   const expected = await expectedBanners('floor@alpha.test');
   const jobCard = expected.find((t) => /job card/i.test(t));
 
-  await page.getByText(jobCard).first().click();
-  const list = await waitForText((t) => /need a job card/i.test(t), 20000, 'the filtered list');
-  await page.screenshot({ path: `${SHOTS}/floor-manager-2-list.png`, fullPage: true });
+  // This leg needs an order still awaiting a job card, and a factory whose
+  // orders have all been carded has none. Skip with a note rather than crash:
+  // `getByText(undefined)` throws inside Playwright, which read as a failure of
+  // the app rather than of the fixture data it depends on.
+  if (!jobCard) {
+    console.log('  ..    no job-card banner on this run — every Alpha order is carded.');
+    console.log('        `node scripts/drive-to-handover.mjs alpha --fixture` raises one.');
+  } else {
+    await page.getByText(jobCard).first().click();
+    const list = await waitForText((t) => /need a job card/i.test(t), 20000, 'the filtered list');
+    await page.screenshot({ path: `${SHOTS}/floor-manager-2-list.png`, fullPage: true });
 
-  // The list must hold the same number the banner claimed.
-  const claimed = Number(jobCard.match(/^(\d+)/)?.[1] ?? 0);
-  const codes = [...list.matchAll(/ALP-\d{5}/g)].map((m) => m[0]);
-  chk(new Set(codes).size === claimed,
-    `list holds ${new Set(codes).size} orders, banner said ${claimed}`);
+    // The list must hold the same number the banner claimed.
+    const claimed = Number(jobCard.match(/^(\d+)/)?.[1] ?? 0);
+    const codes = [...list.matchAll(/ALP-\d{5}/g)].map((m) => m[0]);
+    chk(new Set(codes).size === claimed,
+      `list holds ${new Set(codes).size} orders, banner said ${claimed}`);
 
-  await page.getByText(codes[0]).first().click();
-  // The header ("Job card b…") renders before the screen's data does, so waiting
-  // on the title would pass against a still-spinning screen. Wait for content.
-  const builder = await waitForText((t) => /stage|sequence/i.test(t), 30000,
-    "the job card builder's content");
-  await page.screenshot({ path: `${SHOTS}/floor-manager-3-builder.png`, fullPage: true });
-  chk(/stage|sequence/i.test(builder), `tapping ${codes[0]} opens the Job Card Builder`);
+    await page.getByText(codes[0]).first().click();
+    // The header ("Job card b…") renders before the screen's data does, so
+    // waiting on the title would pass against a still-spinning screen. Wait
+    // for content.
+    const builder = await waitForText((t) => /stage|sequence/i.test(t), 30000,
+      "the job card builder's content");
+    await page.screenshot({ path: `${SHOTS}/floor-manager-3-builder.png`, fullPage: true });
+    chk(/stage|sequence/i.test(builder), `tapping ${codes[0]} opens the Job Card Builder`);
+  }
 }
 
 console.log('\n--- console errors ---');
