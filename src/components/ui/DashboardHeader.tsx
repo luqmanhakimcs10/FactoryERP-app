@@ -151,8 +151,23 @@ const styles = StyleSheet.create({
     paddingBottom: spacing.lg,
     borderBottomLeftRadius: radius.xl,
     borderBottomRightRadius: radius.xl,
+    // The bell's dropdown is taller than this header, so its lower rows hang
+    // over the screen's content — which is a LATER sibling and painted on top
+    // of them. Only the first row was reachable; every row below it was
+    // covered by the list. Raising the header lifts the whole dropdown with it.
+    zIndex: 30,
   },
-  greetRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.md },
+  greetRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.md,
+    // The bell's dropdown is absolutely positioned INSIDE this row, but the
+    // search bar below is a later sibling — so it painted on top of the panel
+    // and swallowed the taps meant for it. The panel's own zIndex could not win
+    // that: stacking is decided between these two siblings, not inside one of
+    // them. Raising the whole row is what puts the panel above the search bar.
+    zIndex: 30,
+  },
   avatar: {
     width: 46,
     height: 46,

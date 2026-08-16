@@ -149,38 +149,69 @@ for (const [key, label] of [['collection', 'Collection'], ['delivery', 'Delivery
   }
 }
 
-// --- 3. the banner is not a dead click ------------------------------------
-// This is the regression that matters: the banner lives on this screen and
-// points back at it, so before the fix the tap changed route params and nothing
-// else. Proving it means clicking it from a DIFFERENT tab and watching the tab
-// actually move.
-console.log('\n--- the dashboard banner opens the right tab ---');
+// --- 3. the four tab-duplicating banners are gone -------------------------
+// They pointed at this screen's own three tabs, which sit directly above them
+// carrying the same counts. Five banners then filled ~680px of a 900px viewport
+// and pushed every row below the fold, so all three tabs looked identical and
+// switching between them appeared to do nothing at all. The count still lives
+// on the tab chip and the bell; what is gone is the second copy of it.
+console.log('\n--- the tab-duplicating banners are not rendered ---');
 const BANNER_TAB = { dp_collect: 'Collection', dp_send: 'Delivery', dp_pickup: 'Pickup', dp_handback: 'Pickup' };
+{
+  const body = await text();
+  for (const b of banners.filter((x) => BANNER_TAB[x.queue_key]))
+    chk(!body.includes(b.banner_title), `"${b.banner_title}" no longer duplicates the ${BANNER_TAB[b.queue_key]} tab`);
+  // A banner whose destination is NOT a tab here must survive.
+  const final = banners.find((x) => x.queue_key === 'dp_final_delivery');
+  if (final) chk(body.includes(final.banner_title), `"${final.banner_title}" is kept — it has no tab`);
+}
+
+// The row the tab holds must be reachable WITHOUT scrolling, on every tab.
+// That is the whole point of the change, and it is the one thing a text-only
+// assertion cannot see: innerText includes what is far below the fold.
+console.log('\n--- every tab shows its work above the fold ---');
+for (const [key, label] of [['collection', 'Collection'], ['delivery', 'Delivery'], ['pickup', 'Pickup']]) {
+  if (!byTab[key].length) continue;
+  await page.getByText(new RegExp(`^${label}( \\(\\d+\\))?$`)).first().click();
+  await page.waitForTimeout(900);
+  const el = page.getByText(byTab[key][0].repeat_code).first();
+  const box = (await el.count()) ? await el.boundingBox() : null;
+  chk(!!box && box.y < 950,
+    `${label}: ${byTab[key][0].repeat_code} visible without scrolling (y=${box ? Math.round(box.y) : 'n/a'})`);
+}
+
+// --- 4. the bell is now the deep link ------------------------------------
+// With the duplicate banners gone the bell carries every count, and its rows
+// navigate. It is also where the original dead-click lived: RoleHome *is* this
+// screen, so landing on it only changes route params — hence the park-on-
+// another-tab dance below, so a no-op is visible as one.
+console.log('\n--- the bell opens the right tab ---');
 for (const b of banners.filter((x) => BANNER_TAB[x.queue_key])) {
   const want = BANNER_TAB[b.queue_key];
-  // Park on a tab that is NOT the destination, so a no-op is visible as one.
   const park = want === 'Collection' ? 'Pickup' : 'Collection';
   await page.getByText(new RegExp(`^${park}( \\(\\d+\\))?$`)).first().click();
   await page.waitForTimeout(800);
 
-  const banner = page.getByText(b.banner_title).first();
-  if (!(await banner.count())) { no(`"${b.banner_title}" banner is on screen`); continue; }
-  ok(`"${b.banner_title}" banner is on screen`);
-  await banner.click();
-  await page.waitForTimeout(1200);
+  await page.getByLabel(/^Notifications/i).first().click();
+  await page.waitForTimeout(900);
+  // Target the row's Pressable by its accessibility label, not its text node.
+  // The text sits UNDER its own Pressable, so a text-node click is refused as
+  // "intercepted" — by the very control that is supposed to receive it.
+  const row = page.getByLabel(new RegExp(`^${b.label}, \\d+ waiting$`)).first();
+  if (!(await row.count())) { no(`bell lists "${b.label}"`); continue; }
+  ok(`bell lists "${b.label}"`);
+  await row.click();
+  await page.waitForTimeout(1300);
 
-  // The destination tab is the selected one, and its rows are what is listed.
   const body = await text();
-  const wantRows = byTab[want.toLowerCase()];
-  const landed = wantRows.every((r) => body.includes(r.repeat_code)) &&
-                 byTab[park.toLowerCase()].every((r) => !body.includes(r.repeat_code) || want === park);
-  chk(landed, `"${b.banner_title}" -> lands on the ${want} tab (was on ${park})`);
-  await page.screenshot({ path: `${SHOTS}/10-banner-${b.queue_key}.png`, fullPage: true });
+  chk(byTab[want.toLowerCase()].every((r) => body.includes(r.repeat_code)),
+    `"${b.label}" -> lands on the ${want} tab (was on ${park})`);
+  await page.screenshot({ path: `${SHOTS}/10-bell-${b.queue_key}.png`, fullPage: true });
 }
 
-// Tapping the SAME banner twice must work twice — the param is consumed after
-// it is applied, which is what makes the second tap live.
-console.log('\n--- the same banner works a second time ---');
+// The same row must work a SECOND time — the tab param is consumed once
+// applied, which is what keeps the next tap live.
+console.log('\n--- the same bell row works a second time ---');
 {
   const b = banners.find((x) => BANNER_TAB[x.queue_key]);
   if (b) {
@@ -188,11 +219,13 @@ console.log('\n--- the same banner works a second time ---');
     const park = want === 'Collection' ? 'Pickup' : 'Collection';
     await page.getByText(new RegExp(`^${park}( \\(\\d+\\))?$`)).first().click();
     await page.waitForTimeout(800);
-    await page.getByText(b.banner_title).first().click();
-    await page.waitForTimeout(1200);
+    await page.getByLabel(/^Notifications/i).first().click();
+    await page.waitForTimeout(900);
+    await page.getByLabel(new RegExp(`^${b.label}, \\d+ waiting$`)).first().click();
+    await page.waitForTimeout(1300);
     const body = await text();
     chk(byTab[want.toLowerCase()].every((r) => body.includes(r.repeat_code)),
-      `"${b.banner_title}" -> still lands on ${want} on a repeat tap`);
+      `"${b.label}" -> still lands on ${want} on a repeat tap`);
   }
 }
 

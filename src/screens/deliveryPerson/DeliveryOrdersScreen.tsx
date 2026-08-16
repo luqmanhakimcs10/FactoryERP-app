@@ -197,7 +197,14 @@ export function DeliveryOrdersScreen({ navigation, route }: any) {
         <View style={styles.stitch} />
       </View>
 
-      <View style={styles.banner}><TaskBanners /></View>
+      {/* The four stage-loop banners are exactly these three tabs, which are
+          right above with the same counts on them. Rendering both stacked five
+          banners over the list and pushed every row off the bottom of the
+          screen, so all three tabs showed the same thing and switching looked
+          broken. "Ready for final delivery" stays — it has no tab. */}
+      <View style={styles.banner}>
+        <TaskBanners hideQueues={['dp_collect', 'dp_send', 'dp_pickup', 'dp_handback']} />
+      </View>
 
       {isLoading ? (
         <ListSkeleton rows={4} />

@@ -50,7 +50,7 @@ async function expectedBanners(email) {
   })).json();
   return (Array.isArray(rows) ? rows : [])
     .filter((r) => r.own_task && Number(r.count) > 0)
-    .map((r) => r.banner_title);
+    .map((r) => ({ queue_key: r.queue_key, banner_title: r.banner_title }));
 }
 
 const ROLES = [
@@ -110,23 +110,49 @@ async function login(who) {
   await page.waitForTimeout(2500);  // let the banner query settle
 }
 
+/**
+ * Banners a dashboard deliberately does NOT render, because that screen is
+ * itself the banner's destination.
+ *
+ * The Delivery Person's three tabs ARE where these four point, and they sit
+ * directly above the banner stack carrying the same counts. Rendering both put
+ * five banners over the list, filled ~680px of a 900px viewport, and pushed
+ * every row below the fold — so all three tabs looked identical and switching
+ * between them appeared to do nothing. The counts still reach the user through
+ * the tab chips and the bell, whose rows navigate.
+ *
+ * Listed here rather than skipped, so the assertion inverts instead of
+ * disappearing: if one of these comes back, this script fails.
+ */
+const SUPPRESSED = {
+  delivery: new Set(['dp_collect', 'dp_send', 'dp_pickup', 'dp_handback']),
+};
+
 console.log('\n========= BANNERS ON SCREEN — Alpha =========\n');
 
 for (const [name, who] of ROLES) {
-  const expected = await expectedBanners(`${who}@alpha.test`);
+  const offered = await expectedBanners(`${who}@alpha.test`);
+  const hidden = SUPPRESSED[who] ?? new Set();
+  const expected = offered.filter((r) => !hidden.has(r.queue_key));
+  const suppressed = offered.filter((r) => hidden.has(r.queue_key));
   await login(who);
   await page.screenshot({ path: `${SHOTS}/${name}.png`, fullPage: true });
 
   const body = await page.evaluate(() => document.body.innerText);
-  console.log(`--- ${name} (${expected.length} banner(s) expected) ---`);
+  console.log(`--- ${name} (${expected.length} banner(s) expected` +
+              `${suppressed.length ? `, ${suppressed.length} suppressed by design` : ''}) ---`);
 
   if (expected.length === 0) {
     // Nothing pending must mean no banner block at all, not an empty card.
     chk(!/need a job card|ready to accept|waiting on you/i.test(body),
       `${name}: nothing pending -> dashboard shows no banners`);
   }
-  for (const title of expected) {
-    chk(body.includes(title), `${name}: "${title}" is on screen`);
+  for (const r of expected) {
+    chk(body.includes(r.banner_title), `${name}: "${r.banner_title}" is on screen`);
+  }
+  for (const r of suppressed) {
+    chk(!body.includes(r.banner_title),
+      `${name}: "${r.banner_title}" stays off — its destination is a tab on this screen`);
   }
 }
 
@@ -138,7 +164,7 @@ console.log('\n--- floor manager: banner -> list -> job card builder ---');
 {
   await login('floor');
   const expected = await expectedBanners('floor@alpha.test');
-  const jobCard = expected.find((t) => /job card/i.test(t));
+  const jobCard = expected.find((r) => /job card/i.test(r.banner_title))?.banner_title;
 
   // This leg needs an order still awaiting a job card, and a factory whose
   // orders have all been carded has none. Skip with a note rather than crash:

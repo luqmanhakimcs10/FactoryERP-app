@@ -19,8 +19,10 @@
 import React, { useState } from 'react';
 import { View, Text, Pressable, StyleSheet, ActivityIndicator } from 'react-native';
 import { useQuery } from '@tanstack/react-query';
+import { useNavigation } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
 import { getQueueSummary } from '../../api/endpoints/stageHandover';
+import { routeForBanner } from '../../navigation/taskQueues';
 import { useAuth } from '../../auth/AuthContext';
 import {
   colors,
@@ -42,6 +44,7 @@ interface QueueBellProps {
 
 export function QueueBell({ variant = 'plain' }: QueueBellProps = {}) {
   const [open, setOpen] = useState(false);
+  const navigation = useNavigation<any>();
   const { profile } = useAuth();
 
   const { data, isLoading, isError } = useQuery({
@@ -109,16 +112,39 @@ export function QueueBell({ variant = 'plain' }: QueueBellProps = {}) {
                 {isError ? 'Could not load your queues just now.' : 'Nothing waiting — you are all caught up.'}
               </Text>
             ) : (
-              rows.map((r) => (
-                <View key={r.queue_key} style={styles.row}>
-                  <Text style={styles.rowLabel} numberOfLines={2}>
-                    {r.label}
-                  </Text>
-                  <View style={styles.count}>
-                    <Text style={styles.countText}>{r.count}</Text>
-                  </View>
-                </View>
-              ))
+              rows.map((r) => {
+                // A row goes somewhere only if the queue is the caller's OWN
+                // job. company_admin counts every role's queue here for
+                // oversight (see 0065), and those destinations are screens
+                // their navigator does not register — a tap would either dead-
+                // end or land somewhere unrelated. Oversight rows stay text.
+                const actionable = r.own_task;
+                const go = () => {
+                  setOpen(false);
+                  const route = routeForBanner(r.queue_key);
+                  navigation.navigate(route.screen as never, route.params as never);
+                };
+                return (
+                  <Pressable
+                    key={r.queue_key}
+                    onPress={actionable ? go : undefined}
+                    disabled={!actionable}
+                    accessibilityRole={actionable ? 'button' : undefined}
+                    accessibilityLabel={actionable ? `${r.label}, ${r.count} waiting` : undefined}
+                    style={({ pressed }) => [styles.row, pressed && styles.rowPressed]}
+                  >
+                    <Text style={styles.rowLabel} numberOfLines={2}>
+                      {r.label}
+                    </Text>
+                    <View style={styles.count}>
+                      <Text style={styles.countText}>{r.count}</Text>
+                    </View>
+                    {actionable ? (
+                      <Ionicons name="chevron-forward" size={14} color={colors.slate} />
+                    ) : null}
+                  </Pressable>
+                );
+              })
             )}
           </View>
         </>
@@ -196,6 +222,7 @@ const styles = StyleSheet.create({
     gap: spacing.sm,
     paddingVertical: spacing.xs,
   },
+  rowPressed: { opacity: 0.6 },
   rowLabel: { flex: 1, fontSize: fontSize.caption, color: colors.indigoDeep },
   count: {
     minWidth: 24,
