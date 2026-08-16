@@ -564,8 +564,14 @@ function bail(why) {
     const qaComplete = await rpc('qa', 'ot_complete_qa_return', { p_damage_id: rejection.damage_id });
     chk(qaComplete.status >= 400, `  QA is refused on Complete return (${qaComplete.status})`);
 
-    // The press itself.
-    const done = await rpc('order', 'ot_complete_qa_return', { p_damage_id: rejection.damage_id });
+    // The press itself. The photo is required by 0059, and the Returns screen
+    // has always sent one (`completeQaReturn` takes it as a positional arg) —
+    // only this walk omitted it, so the call was refused and the four checks
+    // downstream of the piece coming back failed with it.
+    const done = await rpc('order', 'ot_complete_qa_return', {
+      p_damage_id: rejection.damage_id,
+      p_photo_url: PHOTO,
+    });
     chk(done.ok && !!done.body?.ot_return_confirmed_at,
       `COMPLETE RETURN → ${done.ok ? 'confirmed ' + done.body.ot_return_confirmed_at : done.msg}`);
 

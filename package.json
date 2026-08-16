@@ -57,6 +57,7 @@
     "audit:banners": "node scripts/audit-banner-coverage.mjs",
     "verify:fresh": "node scripts/verify-fresh-db.mjs",
     "shots:banners": "node scripts/banner-shots.mjs",
+    "shots:dptabs": "node scripts/dp-tab-shots.mjs",
     "verify:store": "node scripts/verify-store-manager.mjs",
     "drive:handover": "node scripts/drive-to-handover.mjs",
     "verify:needles": "node scripts/verify-needle-stitches.mjs",

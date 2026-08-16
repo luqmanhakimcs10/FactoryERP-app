@@ -32,7 +32,7 @@
  * SLA-breached rows sort to the top of whichever tab they are in and carry an
  * alert pill.
  */
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { View, Text, FlatList, StyleSheet, Pressable, RefreshControl } from 'react-native';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Ionicons } from '@expo/vector-icons';
@@ -98,11 +98,37 @@ const TAB_COPY: Record<DeliveryTab, { title: string; blurb: string; empty: strin
 export function DeliveryOrdersScreen({ navigation, route }: any) {
   const [search, setSearch] = useState('');
   // A task banner deep-links to the tab that actually holds its rows, the same
-  // way the Floor Manager's accept-inventory banner opens its tab.
+  // way the Floor Manager's accept-inventory banner opens its tab. This
+  // initialiser covers the cold case — the screen mounting with a tab already
+  // named on the route...
   const [tab, setTab] = useState<DeliveryTab>(
     (route?.params?.tab as DeliveryTab) ?? 'collection'
   );
   const [openId, setOpenId] = useState<string | null>(null);
+
+  // ...but the initialiser alone is why the banner was a dead click.
+  //
+  // Every OTHER role's banner opens a DIFFERENT screen (TaskQueue, OrdersBox,
+  // StageTracking), which mounts fresh and reads its params on the way up. This
+  // role's banners are rendered BY this screen and point back at it: RoleHome
+  // *is* DeliveryOrdersScreen. So `navigate('RoleHome', { tab: 'delivery' })`
+  // targets the route that is already mounted and focused — React Navigation
+  // updates `route.params` and stops there. No remount, so the useState
+  // initialiser above never runs again and the tab never moved. The tap was
+  // firing and navigating correctly the whole time; it simply had nowhere new
+  // to go, which is exactly what "nothing happens" looks like.
+  //
+  // The param is CONSUMED once applied. Without that, a second tap on the same
+  // banner writes the same value, the dependency below never changes, the
+  // effect never re-runs, and the banner is dead again the moment the user
+  // switches tab by hand.
+  useEffect(() => {
+    const wanted = route?.params?.tab as DeliveryTab | undefined;
+    if (!wanted) return;
+    setTab(wanted);
+    setOpenId(null);
+    navigation.setParams({ tab: undefined });
+  }, [route?.params?.tab, navigation]);
 
   const { data, isLoading, refetch, isRefetching } = useQuery({
     queryKey: ['dpOrders'],
