@@ -17,7 +17,7 @@ import { Screen } from '../../components/ui/Screen';
 import { DashboardHeader } from '../../components/ui/DashboardHeader';
 import { TaskBanners } from '../../components/ui/TaskBanners';
 import { MasterCard, CardGrid, type MasterCardProps } from '../../components/ui/MasterCard';
-import { StatCard, StatGrid } from '../../components/ui/StatGrid';
+import { MetricCard, MetricRow, MetricsSection } from '../../components/ui/MetricCard';
 import { statCount } from '../../utils/statValue';
 import { countOrders } from '../../api/endpoints/orders';
 import { countMasters } from '../../api/endpoints/masters';
@@ -143,34 +143,38 @@ export function FloorManagerDashboardScreen() {
       <ScrollView contentContainerStyle={styles.container}>
         <TaskBanners />
 
-        <View style={styles.metrics}>
-          <StatGrid>
-            <StatCard
+        {/* Every figure here is a live queue depth. Nothing records what
+            "pending stage QA" was last month, so no card carries a trend. */}
+        <MetricsSection subtitle="What the floor is carrying right now">
+          <MetricRow>
+            <MetricCard
               label="Active orders"
               value={statCount(metrics.data?.active)}
               icon="document-text-outline"
+              accent="teal"
               onPress={() => navigation.navigate('OrdersBox')}
             />
-            <StatCard
+            <MetricCard
               label="Awaiting job card"
               value={statCount(metrics.data?.awaitingCard)}
               icon="clipboard-outline"
-              tone={metrics.data?.awaitingCard ? 'attention' : 'neutral'}
+              accent={metrics.data?.awaitingCard ? 'amber' : 'teal'}
               onPress={() => navigation.navigate('OrdersBox', { tab: 'job_card' })}
             />
-            <StatCard
+            <MetricCard
               label="Repeats in production"
               value={statCount(metrics.data?.inProduction)}
               icon="layers-outline"
+              accent="green"
             />
-            <StatCard
+            <MetricCard
               label="Pending stage QA"
               value={statCount(metrics.data?.stageQa)}
               icon="shield-checkmark-outline"
-              tone={metrics.data?.stageQa ? 'attention' : 'neutral'}
+              accent={metrics.data?.stageQa ? 'rose' : 'teal'}
             />
-          </StatGrid>
-        </View>
+          </MetricRow>
+        </MetricsSection>
 
         <CardGrid>
           {visible.map(({ key, ...card }) => (

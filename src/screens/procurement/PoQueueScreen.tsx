@@ -33,7 +33,7 @@ import { TaskBanners } from '../../components/ui/TaskBanners';
 import { SegmentedTabs } from '../../components/ui/SegmentedTabs';
 import { SearchBar } from '../../components/lists/SearchBar';
 import { StatusPill } from '../../components/ui/StatusPill';
-import { StatCard, StatGrid } from '../../components/ui/StatGrid';
+import { MetricCard, MetricRow, MetricsSection } from '../../components/ui/MetricCard';
 import { statCount } from '../../utils/statValue';
 import { listProcurementPos, type ProcurementPoRow } from '../../api/endpoints/inventory';
 import { matchesSearch } from '../../utils/search';
@@ -126,21 +126,24 @@ export function PoQueueScreen() {
             <TaskBanners />
 
             <View style={styles.metrics}>
-              <StatGrid>
-                <StatCard
-                  label="Pending POs"
-                  value={statCount(pendingCount)}
-                  icon="document-text-outline"
-                  tone={pendingCount ? 'attention' : 'neutral'}
-                  onPress={() => setBucket('pending')}
-                />
-                <StatCard
-                  label="Completed POs"
-                  value={statCount(completedCount)}
-                  icon="checkmark-done-outline"
-                  onPress={() => setBucket('completed')}
-                />
-              </StatGrid>
+              <MetricsSection subtitle="Purchase orders, settled and not">
+                <MetricRow>
+                  <MetricCard
+                    label="Pending POs"
+                    value={statCount(pendingCount)}
+                    icon="document-text-outline"
+                    accent={pendingCount ? 'amber' : 'teal'}
+                    onPress={() => setBucket('pending')}
+                  />
+                  <MetricCard
+                    label="Completed POs"
+                    value={statCount(completedCount)}
+                    icon="checkmark-done-outline"
+                    accent="green"
+                    onPress={() => setBucket('completed')}
+                  />
+                </MetricRow>
+              </MetricsSection>
             </View>
             <Text style={styles.lede}>
               {bucket === 'pending'

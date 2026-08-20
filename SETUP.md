@@ -1458,16 +1458,49 @@ RPCs.
 
 ---
 
-## Key Metrics Grid on every dashboard — (0085–0090 APPLIED and verified; 0091 pending)
+## Business Overview metrics on every dashboard — (0085–0091 all APPLIED and verified)
 
 ```
 0091_partner_portal_stats.sql         <- the only one still to paste
 npm run verify:stats                  # 22 checks, browser, all 11 roles
 ```
 
-No new visual pattern: every card is the existing `StatCard`/`StatGrid` from
-`components/ui/StatGrid.tsx`, in the place that component already sits — below
-the header and banners, above the navigation cards.
+The block is `components/ui/MetricCard.tsx` — a **Business Overview** heading,
+then a row of cards: tinted icon badge, label, figure, and a sparkline plus a
+month-on-month delta where real history exists. It sits below the header and
+banners, above the navigation cards.
+
+It REPLACED `StatGrid` on all eleven dashboards. That component's two-column
+cards put the figure above the label, carried no trend, and used
+`flexBasis: 46%` — which on a desktop made two ~940px cards. `MetricRow`
+measures the window instead: four across at 1100px+, three at 760px+, two on a
+phone. `StatGrid` survives only for the three inline mid-page counters that
+predate this work (Orders box, Approvals inbox, Stock home); those are not
+dashboard metric blocks.
+
+**Four accents, in a two-colour app.** The palette is deliberately teal/coral
+everywhere else — on a floor, "act now" has to be distinguishable from "carry
+on". A row of four summary cards is a different job: the colour is telling
+cards apart, not carrying a status. `metricAccents` in theme.ts fixes the set.
+
+**Sparklines only where the series is real, and the SAME quantity the card
+prints.** `utils/metricTrend.ts` has two shapes — `cumulativeTrend` for running
+totals, `periodTrend` for per-month totals — and a live queue depth
+("pending stage QA") fits neither, because nothing recorded what it was in
+April. A line also needs three months that actually happened: a factory a few
+weeks old yields 0,0,0,0,0,2 for everything, which plots as a flat rule and one
+spike, and those five zeroes mean "we were not open yet", not "we produced
+nothing". The lines appear on their own as months accumulate.
+
+Two traps caught while wiring this:
+
+- `worker_get_ledger_entries` is PERIOD-SCOPED. Fed to `periodTrend` it would
+  have drawn five months of confident zero earnings that the query's own WHERE
+  clause invented. The worker's earnings card shows the figure and no line.
+- `build:web` had no heap bump while `web` did, and the export started dying
+  with "Zone Allocation failed". Both scripts now pass
+  `--max-old-space-size=4096`; `vercel.json` runs `build:web`, so the deploy
+  gets it too.
 
 | Role | Cards |
 |---|---|

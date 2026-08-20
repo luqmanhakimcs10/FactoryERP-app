@@ -13,8 +13,9 @@ import { Screen } from '../../components/ui/Screen';
 import { DashboardHeader } from '../../components/ui/DashboardHeader';
 import { TaskBanners } from '../../components/ui/TaskBanners';
 import { MasterCard, CardGrid } from '../../components/ui/MasterCard';
-import { StatCard, StatGrid } from '../../components/ui/StatGrid';
+import { MetricCard, MetricRow, MetricsSection } from '../../components/ui/MetricCard';
 import { statCount, statMoney } from '../../utils/statValue';
+import { cumulativeTrend, periodTrend } from '../../utils/metricTrend';
 import { matchesSearch } from '../../utils/search';
 import { countEmployees } from '../../api/endpoints/employees';
 import { countMasters } from '../../api/endpoints/masters';
@@ -102,13 +103,17 @@ export function MastersTabsScreen() {
         listInvoices().catch(() => []),
       ]);
 
+      const live = invoices.filter((i) => i.status !== 'cancelled');
       return {
         activeOrders: active.length,
         approvals: approvals.length,
         damage: damage.length,
-        revenue: invoices
-          .filter((i) => i.status !== 'cancelled' && new Date(i.issued_at) >= monthStart)
+        revenue: live
+          .filter((i) => new Date(i.issued_at) >= monthStart)
           .reduce((n, i) => n + Number(i.amount ?? 0), 0),
+        // Two real series, from timestamps already on the rows above.
+        revenueTrend: periodTrend(live, (i) => i.issued_at, 6, (i) => Number(i.amount ?? 0)),
+        damageTrend: cumulativeTrend(damage, (d: any) => d.created_at),
       };
     },
   });
@@ -151,33 +156,38 @@ export function MastersTabsScreen() {
       <ScrollView contentContainerStyle={styles.container}>
         <TaskBanners />
 
-        <View style={styles.metrics}>
-          <StatGrid>
-            <StatCard
+        <MetricsSection>
+          <MetricRow>
+            <MetricCard
               label="Active orders"
               value={statCount(metrics.data?.activeOrders)}
               icon="document-text-outline"
+              accent="teal"
             />
-            <StatCard
+            <MetricCard
               label="Invoiced this month"
               value={metrics.isError ? '—' : statMoney(metrics.data?.revenue)}
               icon="cash-outline"
+              accent="green"
+              emphasis
+              {...(metrics.data?.revenueTrend ?? {})}
             />
-            <StatCard
+            <MetricCard
               label="Pending approvals"
               value={statCount(metrics.data?.approvals)}
               icon="checkmark-done-outline"
-              tone={metrics.data?.approvals ? 'attention' : 'neutral'}
+              accent={metrics.data?.approvals ? 'amber' : 'teal'}
               onPress={() => navigation.navigate('ApprovalsInbox')}
             />
-            <StatCard
+            <MetricCard
               label="Damage records"
               value={statCount(metrics.data?.damage)}
               icon="alert-circle-outline"
-              tone={metrics.data?.damage ? 'attention' : 'neutral'}
+              accent={metrics.data?.damage ? 'rose' : 'teal'}
+              {...(metrics.data?.damageTrend ?? {})}
             />
-          </StatGrid>
-        </View>
+          </MetricRow>
+        </MetricsSection>
         <CardGrid>
           {visible.map((card) => (
             <MasterCard

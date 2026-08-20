@@ -93,10 +93,16 @@ async function loginAs(email) {
 async function statValue(label) {
   // `.+` not `\S+`: a value can be more than one word ("Not done"), and the
   // stricter pattern silently matched nothing and reported the card as blank.
-  const el = page.getByLabel(new RegExp(`^.+ ${label}$`)).first();
+  //
+  // The optional tail is the delta a card carries when it has real history —
+  // "2 Damage records, up 12% vs last month" — so the label is not always the
+  // last thing in the string.
+  const el = page.getByLabel(new RegExp(`^.+ ${label}(,.*)?$`)).first();
   if (!(await el.count())) return null;
   const text = await el.getAttribute('aria-label').catch(() => null);
-  return text ? text.slice(0, text.length - label.length).trim() : null;
+  if (!text) return null;
+  const at = text.indexOf(label);
+  return at > 0 ? text.slice(0, at).trim() : text.trim();
 }
 
 console.log('\n  Key Metrics Grid — every role\n');
@@ -105,13 +111,13 @@ console.log('\n  Key Metrics Grid — every role\n');
 // 1. Presence, role by role
 // ===========================================================================
 const EXPECTED = [
-  ['super@erp.test', 'Super Admin', ['Total factories', 'Active factories', 'Unpaid subscriptions', 'Pending amount']],
+  ['super@erp.test', 'Super Admin', ['Total factories', 'Active factories', 'Unpaid subscriptions', 'Billed this month']],
   ['owner@alpha.test', 'Company Admin', ['Active orders', 'Invoiced this month', 'Pending approvals', 'Damage records']],
   ['accountant@alpha.test', 'Accountant', ['Payables due', 'Receivables due', 'POs awaiting payment', 'Pending salary runs']],
   ['floor@alpha.test', 'Floor Manager', ['Active orders', 'Awaiting job card', 'Repeats in production', 'Pending stage QA']],
   ['store@alpha.test', 'Store Manager', ['Pending material requests', 'POs in progress', 'Low stock items', "Today's audit"]],
   ['qa@alpha.test', 'QA', ['Orders awaiting QA', 'Orders in production', 'Rejected, awaiting return']],
-  ['order@alpha.test', 'Order Taker', ['Active orders', 'Awaiting cloth inspection', 'Active returns']],
+  ['order@alpha.test', 'Order Taker', ['Orders captured', 'Active orders', 'Awaiting cloth inspection', 'Active returns']],
   ['procurement@alpha.test', 'Procurement', ['Pending POs', 'Completed POs']],
   ['delivery@alpha.test', 'Delivery Person', ['In Collection', 'In Delivery', 'In Pickup']],
   ['worker@alpha.test', 'Worker', ['Stitches this period', 'Earnings this period', 'Bonus earned', 'Leave days approved']],
@@ -127,6 +133,8 @@ for (const [email, role, labels] of EXPECTED) {
   const t = await body();
   const missing = labels.filter((l) => !t.includes(l));
   chk(missing.length === 0, `${role}: ${labels.length} metric cards${missing.length ? ` (missing ${missing.join(', ')})` : ''}`);
+  // The block heading is what tells the new design from the old grid.
+  chk(/Business Overview|Your month/.test(t), `${role}: carries the Business Overview block`);
 
   // Nothing may render as a bare placeholder — the card contract is a real
   // figure or an em-dash, never an empty value.

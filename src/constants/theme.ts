@@ -101,6 +101,28 @@ export function pillTint(color: string): { bg: string; ink: string } {
   return { bg: TINT_TEAL, ink: PRIMARY };
 }
 
+/**
+ * Metric-card accents — the ONE place this app is not two-colour.
+ *
+ * Everything else is deliberately teal-or-coral (see the palette notes above):
+ * on a factory floor, a status that means "act now" has to be told from one
+ * that means "carry on", and two hues do that better than six.
+ *
+ * A row of four summary cards is a different problem. There the colour is not
+ * carrying a status at all — it is telling four cards apart so the eye can
+ * return to the right one. Four accents, defined once, used only by
+ * `MetricCard`; each is a `tint` for the icon well, an `ink` for the icon,
+ * figure and sparkline, and a `card` wash for the card itself.
+ */
+export const metricAccents = {
+  teal:  { tint: '#DCEFEE', ink: '#0D7377', card: '#F7FBFB' },
+  green: { tint: '#DCF0E3', ink: '#1E8E5A', card: '#F7FCF9' },
+  amber: { tint: '#FBEBD8', ink: '#C2761B', card: '#FEFAF5' },
+  rose:  { tint: '#FBE0DD', ink: '#C7453A', card: '#FEF8F7' },
+} as const;
+
+export type MetricAccent = keyof typeof metricAccents;
+
 export const spacing = {
   xs: 4,
   sm: 8,
@@ -212,5 +234,15 @@ export const tracking = {
   caps: 0.8,
 } as const;
 
-export const theme = { colors, spacing, radius, fontSize, fontFamily, fontWeight, elevation, tracking };
+export const theme = {
+  colors,
+  metricAccents,
+  spacing,
+  radius,
+  fontSize,
+  fontFamily,
+  fontWeight,
+  elevation,
+  tracking,
+};
 export type Theme = typeof theme;

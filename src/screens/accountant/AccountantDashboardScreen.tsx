@@ -14,7 +14,7 @@ import { Screen } from '../../components/ui/Screen';
 import { DashboardHeader } from '../../components/ui/DashboardHeader';
 import { TaskBanners } from '../../components/ui/TaskBanners';
 import { MasterCard, CardGrid } from '../../components/ui/MasterCard';
-import { StatCard, StatGrid } from '../../components/ui/StatGrid';
+import { MetricCard, MetricRow, MetricsSection } from '../../components/ui/MetricCard';
 import { statCount, statMoney } from '../../utils/statValue';
 import { matchesSearch } from '../../utils/search';
 import { countMasters } from '../../api/endpoints/masters';
@@ -166,33 +166,39 @@ export function AccountantDashboardScreen() {
       <ScrollView contentContainerStyle={styles.container}>
         <TaskBanners />
 
-        <View style={styles.metrics}>
-          <StatGrid>
-            <StatCard
+        {/* All four are live balances — what is owed RIGHT NOW. Nothing
+            stores what the payables total was last month, so none carries a
+            trend line. */}
+        <MetricsSection subtitle="Money in and money out, today">
+          <MetricRow>
+            <MetricCard
               label="Payables due"
               value={metrics.isError ? '—' : statMoney(metrics.data?.payables)}
               icon="arrow-up-circle-outline"
-              tone={(metrics.data?.payables ?? 0) > 0 ? 'attention' : 'neutral'}
+              accent={(metrics.data?.payables ?? 0) > 0 ? 'rose' : 'teal'}
+              emphasis
             />
-            <StatCard
+            <MetricCard
               label="Receivables due"
               value={metrics.isError ? '—' : statMoney(metrics.data?.receivables)}
               icon="arrow-down-circle-outline"
+              accent="green"
+              emphasis
             />
-            <StatCard
+            <MetricCard
               label="POs awaiting payment"
               value={statCount(metrics.data?.posAwaitingPayment)}
               icon="document-text-outline"
-              tone={metrics.data?.posAwaitingPayment ? 'attention' : 'neutral'}
+              accent={metrics.data?.posAwaitingPayment ? 'amber' : 'teal'}
             />
-            <StatCard
+            <MetricCard
               label="Pending salary runs"
               value={statCount(metrics.data?.pendingSalaries)}
               icon="people-outline"
-              tone={metrics.data?.pendingSalaries ? 'attention' : 'neutral'}
+              accent={metrics.data?.pendingSalaries ? 'amber' : 'teal'}
             />
-          </StatGrid>
-        </View>
+          </MetricRow>
+        </MetricsSection>
         <CardGrid>
           {visible.map((card) => (
             <MasterCard
