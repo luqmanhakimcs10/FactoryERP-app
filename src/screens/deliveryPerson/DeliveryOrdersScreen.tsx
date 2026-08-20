@@ -39,7 +39,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { Screen } from '../../components/ui/Screen';
 import { DashboardHeader } from '../../components/ui/DashboardHeader';
 import { SegmentedTabs } from '../../components/ui/SegmentedTabs';
-import { StatCard, StatGrid } from '../../components/ui/StatGrid';
+import { MetricCard, MetricRow, MetricsSection } from '../../components/ui/MetricCard';
 import { statCount } from '../../utils/statValue';
 import { TaskBanners } from '../../components/ui/TaskBanners';
 import { AppButton } from '../../components/ui/AppButton';
@@ -183,29 +183,31 @@ export function DeliveryOrdersScreen({ navigation, route }: any) {
       />
 
       <View style={styles.metrics}>
-        <StatGrid>
-          <StatCard
-            label="In Collection"
-            value={statCount(isLoading ? undefined : counts.collection)}
-            icon="download-outline"
-            tone={counts.collection ? 'attention' : 'neutral'}
-            onPress={() => setTab('collection')}
-          />
-          <StatCard
-            label="In Delivery"
-            value={statCount(isLoading ? undefined : counts.delivery)}
-            icon="bicycle-outline"
-            tone={counts.delivery ? 'attention' : 'neutral'}
-            onPress={() => setTab('delivery')}
-          />
-          <StatCard
-            label="In Pickup"
-            value={statCount(isLoading ? undefined : counts.pickup)}
-            icon="cube-outline"
-            tone={counts.pickup ? 'attention' : 'neutral'}
-            onPress={() => setTab('pickup')}
-          />
-        </StatGrid>
+        <MetricsSection subtitle="What is in your hands right now">
+          <MetricRow>
+            <MetricCard
+              label="In Collection"
+              value={statCount(isLoading ? undefined : counts.collection)}
+              icon="download-outline"
+              accent={counts.collection ? 'amber' : 'teal'}
+              onPress={() => setTab('collection')}
+            />
+            <MetricCard
+              label="In Delivery"
+              value={statCount(isLoading ? undefined : counts.delivery)}
+              icon="bicycle-outline"
+              accent={counts.delivery ? 'green' : 'teal'}
+              onPress={() => setTab('delivery')}
+            />
+            <MetricCard
+              label="In Pickup"
+              value={statCount(isLoading ? undefined : counts.pickup)}
+              icon="cube-outline"
+              accent={counts.pickup ? 'rose' : 'teal'}
+              onPress={() => setTab('pickup')}
+            />
+          </MetricRow>
+        </MetricsSection>
       </View>
 
       <View style={styles.tabsWrap}>

@@ -21,7 +21,7 @@ import { Screen } from '../../components/ui/Screen';
 import { DashboardHeader } from '../../components/ui/DashboardHeader';
 import { TaskBanners } from '../../components/ui/TaskBanners';
 import { MasterCard, CardGrid, type MasterCardProps } from '../../components/ui/MasterCard';
-import { StatCard, StatGrid } from '../../components/ui/StatGrid';
+import { MetricCard, MetricRow, MetricsSection } from '../../components/ui/MetricCard';
 import { statCount } from '../../utils/statValue';
 import { listOrders, listFactoryDamage } from '../../api/endpoints/orders';
 import { matchesSearch } from '../../utils/search';
@@ -101,29 +101,30 @@ export function QaDashboardScreen() {
       <ScrollView contentContainerStyle={styles.container}>
         <TaskBanners />
 
-        <View style={styles.metrics}>
-          <StatGrid>
-            <StatCard
+        <MetricsSection subtitle="What is waiting on inspection">
+          <MetricRow>
+            <MetricCard
               label="Orders awaiting QA"
               value={statCount(data?.length)}
               icon="shield-checkmark-outline"
-              tone={data?.length ? 'attention' : 'neutral'}
+              accent={data?.length ? 'amber' : 'teal'}
               onPress={() => navigation.navigate('InspectionQueue')}
             />
-            <StatCard
+            <MetricCard
               label="Orders in production"
               value={statCount(inProduction?.length)}
               icon="layers-outline"
+              accent="green"
               onPress={() => navigation.navigate('StageTrackingQueue')}
             />
-            <StatCard
+            <MetricCard
               label="Rejected, awaiting return"
               value={statCount(rejected.data)}
               icon="return-up-back-outline"
-              tone={rejected.data ? 'attention' : 'neutral'}
+              accent={rejected.data ? 'rose' : 'teal'}
             />
-          </StatGrid>
-        </View>
+          </MetricRow>
+        </MetricsSection>
         <CardGrid>
           {visible.map(({ key, ...card }) => (
             <MasterCard key={key} {...card} />

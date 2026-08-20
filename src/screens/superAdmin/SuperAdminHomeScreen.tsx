@@ -34,8 +34,9 @@ import { SelectField } from '../../components/forms/SelectField';
 import { RowMenu } from '../../components/ui/RowMenu';
 import { ConfirmDialog } from '../../components/ui/ConfirmDialog';
 import { StatusPill } from '../../components/ui/StatusPill';
-import { StatCard, StatGrid } from '../../components/ui/StatGrid';
+import { MetricCard, MetricRow, MetricsSection } from '../../components/ui/MetricCard';
 import { statCount, statMoney } from '../../utils/statValue';
+import { cumulativeTrend, periodTrend } from '../../utils/metricTrend';
 import {
   saFactoryList,
   saFactoryModules,
@@ -102,6 +103,26 @@ function DashboardTab() {
     queryKey: ['saInvoices', 'pending'],
     queryFn: () => saInvoiceList({ status: 'pending' }),
   });
+  /**
+   * Every invoice ever raised, for the billed-per-month line and the figure
+   * above it. One read the Invoice History tab already makes — React Query
+   * hands both tabs the same cached result.
+   */
+  const billed = useQuery({
+    queryKey: ['saInvoices', 'all'],
+    queryFn: () => saInvoiceList(),
+  });
+
+  const factoryTrend = cumulativeTrend(factories.data, (f) => f.created_at);
+  const billedTrend = periodTrend(
+    billed.data?.filter((i) => i.status !== 'cancelled'),
+    (i) => i.issued_on,
+    6,
+    (i) => Number(i.amount ?? 0)
+  );
+  const billedThisMonth = billedTrend.trend
+    ? billedTrend.trend[billedTrend.trend.length - 1]
+    : undefined;
 
   // The factory the confirmation popup is currently about. Holding the whole
   // row (not just an id) keeps the copy specific — "Deactivate Alpha Textiles?"
@@ -156,35 +177,47 @@ function DashboardTab() {
           />
         ) : null}
 
-        {/* The four platform numbers. Both reads are already on this tab —
-            the factory list for the tenancy figures, the billing summary for
-            what is owed — so the grid costs nothing extra. */}
-        <StatGrid>
-          <StatCard
-            label="Total factories"
-            value={statCount(factories.data?.length)}
-            icon="business-outline"
-          />
-          <StatCard
-            label="Active factories"
-            value={statCount(
-              factories.data?.filter((f) => f.account_status === 'active').length
-            )}
-            icon="checkmark-circle-outline"
-          />
-          <StatCard
-            label="Unpaid subscriptions"
-            value={statCount(factories.data ? unpaid : undefined)}
-            icon="alert-circle-outline"
-            tone={unpaid > 0 ? 'attention' : 'neutral'}
-          />
-          <StatCard
-            label="Pending amount"
-            value={summary.isError ? '—' : statMoney(summary.data?.pending_total)}
-            icon="cash-outline"
-            tone={(summary.data?.pending_total ?? 0) > 0 ? 'attention' : 'neutral'}
-          />
-        </StatGrid>
+        {/* Both reads are already on this tab — the factory list for the
+            tenancy figures, the billing summary for what is owed — so the block
+            costs nothing extra.
+
+            Only two of the four can carry a trend. "Total factories" is a
+            cumulative count, so its line is that same count at each past month
+            end. Billed-per-month likewise. The other two are live states:
+            nothing recorded how many factories were unpaid in April. */}
+        <MetricsSection subtitle="The platform, across every factory">
+          <MetricRow>
+            <MetricCard
+              label="Total factories"
+              value={statCount(factories.data?.length)}
+              icon="business-outline"
+              accent="teal"
+              {...factoryTrend}
+            />
+            <MetricCard
+              label="Active factories"
+              value={statCount(
+                factories.data?.filter((f) => f.account_status === 'active').length
+              )}
+              icon="checkmark-circle-outline"
+              accent="green"
+            />
+            <MetricCard
+              label="Unpaid subscriptions"
+              value={statCount(factories.data ? unpaid : undefined)}
+              icon="alert-circle-outline"
+              accent={unpaid > 0 ? 'rose' : 'teal'}
+            />
+            <MetricCard
+              label="Billed this month"
+              value={billed.isError ? '—' : statMoney(billedThisMonth)}
+              icon="cash-outline"
+              accent="amber"
+              emphasis
+              {...billedTrend}
+            />
+          </MetricRow>
+        </MetricsSection>
 
         {/* ---- Factories ---- */}
         <SectionHeading

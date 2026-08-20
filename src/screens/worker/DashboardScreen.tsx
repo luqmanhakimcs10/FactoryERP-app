@@ -16,7 +16,7 @@ import { useNavigation } from '@react-navigation/native';
 import { Screen } from '../../components/ui/Screen';
 import { DashboardHeader } from '../../components/ui/DashboardHeader';
 import { TaskBanners } from '../../components/ui/TaskBanners';
-import { StatCard, StatGrid } from '../../components/ui/StatGrid';
+import { MetricCard, MetricRow, MetricsSection } from '../../components/ui/MetricCard';
 import { statCount, statMoney, statBigCount } from '../../utils/statValue';
 import { StitchLine } from '../../components/ui/StitchLine';
 import { StatusPill } from '../../components/ui/StatusPill';
@@ -58,6 +58,18 @@ export function WorkerDashboardScreen() {
     queryKey: ['worker', 'leaveHistory'],
     queryFn: getWorkerLeaveHistory,
   });
+  /*
+   * NO EARNINGS TREND, and the reason is worth writing down.
+   *
+   * `worker_ledger` does keep a row per shift with its own `created_at`, so the
+   * series exists in the table. But `worker_get_ledger_entries` is PERIOD-SCOPED
+   * — called with no argument it returns the current payroll period only. Fed
+   * to `periodTrend` that yields 0,0,0,0,0,X: five months of "this worker
+   * earned nothing", invented by the query's own filter rather than by the
+   * data. Six calls, or a new RPC, would fix it; the brief says not to add
+   * heavy queries or backend for a dashboard figure, so the card shows the
+   * number without a line.
+   */
 
   /**
    * A ledger figure, or the right kind of blank.
@@ -118,33 +130,40 @@ export function WorkerDashboardScreen() {
         </View>
 
         <View style={styles.metrics}>
-          <StatGrid>
-            {/* `ledgerFigure` distinguishes the two things an absent number can
-                mean. Still loading, or the read failed -> em-dash. Loaded, with
-                no ledger row for this period -> the worker has earned nothing
-                yet, and 0 is the true answer rather than a shrug. */}
-            <StatCard
-              label="Stitches this period"
-              value={ledgerFigure(ledger.data?.stitch_count, statBigCount)}
-              icon="git-commit-outline"
-            />
-            <StatCard
-              label="Earnings this period"
-              value={ledgerFigure(ledger.data?.net, statMoney)}
-              icon="cash-outline"
-            />
-            <StatCard
-              label="Bonus earned"
-              value={ledgerFigure(ledger.data?.bonus, statMoney)}
-              icon="trophy-outline"
-            />
-            <StatCard
-              label="Leave days approved"
-              value={statCount(leaveDays)}
-              icon="calendar-outline"
-              onPress={() => navigation.navigate('LeaveRequest')}
-            />
-          </StatGrid>
+          <MetricsSection subtitle="Your period so far">
+            <MetricRow>
+              {/* `ledgerFigure` distinguishes the two things an absent number
+                  can mean. Still loading, or the read failed -> em-dash.
+                  Loaded, with no ledger row for this period -> the worker has
+                  earned nothing yet, and 0 is the true answer, not a shrug. */}
+              <MetricCard
+                label="Stitches this period"
+                value={ledgerFigure(ledger.data?.stitch_count, statBigCount)}
+                icon="git-commit-outline"
+                accent="teal"
+              />
+              <MetricCard
+                label="Earnings this period"
+                value={ledgerFigure(ledger.data?.net, statMoney)}
+                icon="cash-outline"
+                accent="green"
+                emphasis
+              />
+              <MetricCard
+                label="Bonus earned"
+                value={ledgerFigure(ledger.data?.bonus, statMoney)}
+                icon="trophy-outline"
+                accent="amber"
+              />
+              <MetricCard
+                label="Leave days approved"
+                value={statCount(leaveDays)}
+                icon="calendar-outline"
+                accent="rose"
+                onPress={() => navigation.navigate('LeaveRequest')}
+              />
+            </MetricRow>
+          </MetricsSection>
         </View>
 
         <View style={styles.section}>

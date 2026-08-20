@@ -17,8 +17,9 @@ import { Screen } from '../../components/ui/Screen';
 import { DashboardHeader } from '../../components/ui/DashboardHeader';
 import { TaskBanners } from '../../components/ui/TaskBanners';
 import { MasterCard, CardGrid, type MasterCardProps } from '../../components/ui/MasterCard';
-import { StatCard, StatGrid } from '../../components/ui/StatGrid';
+import { MetricCard, MetricRow, MetricsSection } from '../../components/ui/MetricCard';
 import { statCount } from '../../utils/statValue';
+import { cumulativeTrend } from '../../utils/metricTrend';
 import { matchesSearch } from '../../utils/search';
 import { countOrders, listReturnRepeats, listOrders } from '../../api/endpoints/orders';
 import { ACTIVE_ORDER_STATUSES } from '../../models/orderTypes';
@@ -47,6 +48,17 @@ export function OrderTakerDashboardScreen() {
     queryKey: ['orders', 'otAwaitingInspection'],
     queryFn: () => listOrders(['awaiting_cloth_inspection']),
   });
+  /**
+   * Orders captured is a CUMULATIVE total, so it can be plotted honestly: the
+   * running count at the end of each of the last six months, from the
+   * `created_at` already on every row this screen loaded. The other three are
+   * live states with no history, and carry no trend.
+   */
+  const allOrders = useQuery({
+    queryKey: ['orders', 'otAll'],
+    queryFn: () => listOrders(),
+  });
+  const captured = cumulativeTrend(allOrders.data, (o) => o.created_at);
   const returns = useQuery({ queryKey: ['returnRepeats'], queryFn: listReturnRepeats });
 
   const activeCount = returns.data
@@ -112,28 +124,38 @@ export function OrderTakerDashboardScreen() {
 
         <TaskBanners />
 
-        <View style={styles.metrics}>
-          <StatGrid>
-            <StatCard
-              label="Active orders"
-              value={statCount(activeOrders.data?.length)}
+        <MetricsSection subtitle="Your orders, at a glance">
+          <MetricRow>
+            <MetricCard
+              label="Orders captured"
+              value={statCount(orders.data)}
               icon="document-text-outline"
+              accent="teal"
+              {...captured}
               onPress={() => navigation.navigate('MyOrders')}
             />
-            <StatCard
+            <MetricCard
+              label="Active orders"
+              value={statCount(activeOrders.data?.length)}
+              icon="pulse-outline"
+              accent="green"
+              onPress={() => navigation.navigate('MyOrders')}
+            />
+            <MetricCard
               label="Awaiting cloth inspection"
               value={statCount(awaitingInspection.data?.length)}
               icon="shield-checkmark-outline"
+              accent="amber"
             />
-            <StatCard
+            <MetricCard
               label="Active returns"
               value={statCount(activeCount ?? undefined)}
               icon="swap-horizontal-outline"
-              tone={activeCount ? 'attention' : 'neutral'}
+              accent={activeCount ? 'rose' : 'teal'}
               onPress={() => navigation.navigate('Returns')}
             />
-          </StatGrid>
-        </View>
+          </MetricRow>
+        </MetricsSection>
 
         <CardGrid>
           {visible.map(({ key, ...card }) => (

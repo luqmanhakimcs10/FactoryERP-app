@@ -26,7 +26,7 @@ import { Screen } from '../../components/ui/Screen';
 import { DashboardHeader } from '../../components/ui/DashboardHeader';
 import { TaskBanners } from '../../components/ui/TaskBanners';
 import { MasterCard, CardGrid, type MasterCardProps } from '../../components/ui/MasterCard';
-import { StatCard, StatGrid } from '../../components/ui/StatGrid';
+import { MetricCard, MetricRow, MetricsSection } from '../../components/ui/MetricCard';
 import { statCount } from '../../utils/statValue';
 import { matchesSearch } from '../../utils/search';
 import {
@@ -141,39 +141,40 @@ export function StoreManagerHomeScreen() {
       <ScrollView contentContainerStyle={styles.container}>
         <TaskBanners />
 
-        <View style={styles.metrics}>
-          <StatGrid>
-            <StatCard
+        <MetricsSection subtitle="What the store owes the floor">
+          <MetricRow>
+            <MetricCard
               label="Pending material requests"
               value={statCount(data?.openRequests)}
               icon="cube-outline"
-              tone={data?.openRequests ? 'attention' : 'neutral'}
+              accent={data?.openRequests ? 'amber' : 'teal'}
               onPress={() => navigation.navigate('StoreRequestsSection')}
             />
-            <StatCard
+            <MetricCard
               label="POs in progress"
               value={statCount(data?.posInProgress)}
               icon="document-text-outline"
+              accent="teal"
               onPress={() => navigation.navigate('StorePoSection')}
             />
-            <StatCard
+            <MetricCard
               label="Low stock items"
               value={statCount(data?.lowStock)}
               icon="alert-circle-outline"
-              tone={data?.lowStock ? 'attention' : 'neutral'}
+              accent={data?.lowStock ? 'rose' : 'green'}
               onPress={() => navigation.navigate('StoreInventorySection')}
             />
-            <StatCard
-              label="Today's audit"
+            <MetricCard
               // A yes/no, not a count — the brief asks for an indicator, and a
               // "1" here would read as one item audited.
+              label="Today's audit"
               value={data === undefined ? '—' : data.auditDone ? 'Done' : 'Not done'}
               icon="checkmark-done-outline"
-              tone={data && !data.auditDone ? 'attention' : 'neutral'}
+              accent={data && !data.auditDone ? 'rose' : 'green'}
               onPress={() => navigation.navigate('DailyAudit')}
             />
-          </StatGrid>
-        </View>
+          </MetricRow>
+        </MetricsSection>
 
         <CardGrid>
           {visible.map(({ key, ...card }) => (

@@ -28,7 +28,7 @@ import { Screen } from '../../components/ui/Screen';
 import { AppButton } from '../../components/ui/AppButton';
 import { StatusPill } from '../../components/ui/StatusPill';
 import { StitchLine } from '../../components/ui/StitchLine';
-import { StatCard, StatGrid } from '../../components/ui/StatGrid';
+import { MetricCard, MetricRow, MetricsSection } from '../../components/ui/MetricCard';
 import { statCount, statMoney } from '../../utils/statValue';
 import {
   partnerPortalInfo,
@@ -153,24 +153,29 @@ export function PartnerPortalScreen({ token }: { token: string }) {
         </View>
 
         <View style={styles.metrics}>
-          <StatGrid>
-            <StatCard
-              label="Active work items"
-              value={statCount(stats.isError ? undefined : stats.data?.active_items)}
-              icon="cube-outline"
-              tone={stats.data?.active_items ? 'attention' : 'neutral'}
-            />
-            <StatCard
-              label="Completed this month"
-              value={statCount(stats.isError ? undefined : stats.data?.completed_this_month)}
-              icon="checkmark-done-outline"
-            />
-            <StatCard
-              label="Earnings this month"
-              value={stats.isError ? '—' : statMoney(stats.data?.earnings_this_month)}
-              icon="cash-outline"
-            />
-          </StatGrid>
+          <MetricsSection title="Your month" subtitle="Work in hand and what it has earned">
+            <MetricRow>
+              <MetricCard
+                label="Active work items"
+                value={statCount(stats.isError ? undefined : stats.data?.active_items)}
+                icon="cube-outline"
+                accent={stats.data?.active_items ? 'amber' : 'teal'}
+              />
+              <MetricCard
+                label="Completed this month"
+                value={statCount(stats.isError ? undefined : stats.data?.completed_this_month)}
+                icon="checkmark-done-outline"
+                accent="teal"
+              />
+              <MetricCard
+                label="Earnings this month"
+                value={stats.isError ? '—' : statMoney(stats.data?.earnings_this_month)}
+                icon="cash-outline"
+                accent="green"
+                emphasis
+              />
+            </MetricRow>
+          </MetricsSection>
         </View>
 
         <Text style={styles.sectionTitle}>
