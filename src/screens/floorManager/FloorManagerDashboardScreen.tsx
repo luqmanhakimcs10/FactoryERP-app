@@ -17,8 +17,12 @@ import { Screen } from '../../components/ui/Screen';
 import { DashboardHeader } from '../../components/ui/DashboardHeader';
 import { TaskBanners } from '../../components/ui/TaskBanners';
 import { MasterCard, CardGrid, type MasterCardProps } from '../../components/ui/MasterCard';
+import { StatCard, StatGrid } from '../../components/ui/StatGrid';
+import { statCount } from '../../utils/statValue';
 import { countOrders } from '../../api/endpoints/orders';
 import { countMasters } from '../../api/endpoints/masters';
+import { listOrders, countRepeatsByStatus } from '../../api/endpoints/orders';
+import { ACTIVE_ORDER_STATUSES } from '../../models/orderTypes';
 import { listShiftCloseQueue, listFactoryLeaves } from '../../api/endpoints/shifts';
 import { listFactoryDamage } from '../../api/endpoints/orders';
 import { matchesSearch } from '../../utils/search';
@@ -27,6 +31,33 @@ import { colors, spacing, fontSize } from '../../constants/theme';
 export function FloorManagerDashboardScreen() {
   const navigation = useNavigation<any>();
   const [search, setSearch] = useState('');
+
+  /**
+   * The four numbers this role runs the floor by. Every one is a read this
+   * dashboard's own screens already make — no new backend was added for them.
+   *
+   * `countRepeatsByStatus` is a HEAD count rather than a list: the two repeat
+   * figures are factory-wide, and pulling every repeat to call `.length` on it
+   * is the kind of query a dashboard quietly makes expensive.
+   */
+  const metrics = useQuery({
+    queryKey: ['fmMetrics'],
+    queryFn: async () => {
+      const [active, awaitingCard, inProduction, stageQa] = await Promise.all([
+        listOrders(ACTIVE_ORDER_STATUSES),
+        listOrders(['awaiting_job_card', 'job_card_shared']),
+        countRepeatsByStatus(['in_progress', 'handed_off', 'handed_over', 'awaiting_dp_collection',
+          'returned_to_delivery', 'awaiting_fm_collection']),
+        countRepeatsByStatus(['stage_qa']),
+      ]);
+      return {
+        active: active.length,
+        awaitingCard: awaitingCard.length,
+        inProduction,
+        stageQa,
+      };
+    },
+  });
 
   const { data, isError } = useQuery({
     queryKey: ['floorManagerCardCounts'],
@@ -112,6 +143,35 @@ export function FloorManagerDashboardScreen() {
       <ScrollView contentContainerStyle={styles.container}>
         <TaskBanners />
 
+        <View style={styles.metrics}>
+          <StatGrid>
+            <StatCard
+              label="Active orders"
+              value={statCount(metrics.data?.active)}
+              icon="document-text-outline"
+              onPress={() => navigation.navigate('OrdersBox')}
+            />
+            <StatCard
+              label="Awaiting job card"
+              value={statCount(metrics.data?.awaitingCard)}
+              icon="clipboard-outline"
+              tone={metrics.data?.awaitingCard ? 'attention' : 'neutral'}
+              onPress={() => navigation.navigate('OrdersBox', { tab: 'job_card' })}
+            />
+            <StatCard
+              label="Repeats in production"
+              value={statCount(metrics.data?.inProduction)}
+              icon="layers-outline"
+            />
+            <StatCard
+              label="Pending stage QA"
+              value={statCount(metrics.data?.stageQa)}
+              icon="shield-checkmark-outline"
+              tone={metrics.data?.stageQa ? 'attention' : 'neutral'}
+            />
+          </StatGrid>
+        </View>
+
         <CardGrid>
           {visible.map(({ key, ...card }) => (
             <MasterCard key={key} {...card} />
@@ -128,6 +188,7 @@ export function FloorManagerDashboardScreen() {
 }
 
 const styles = StyleSheet.create({
+  metrics: { marginBottom: spacing.lg },
   container: { padding: spacing.lg, paddingTop: spacing.xl },
   banner: { marginBottom: spacing.lg },
   empty: {

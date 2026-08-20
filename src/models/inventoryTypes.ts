@@ -1,15 +1,43 @@
 /** Phase 4 — inventory & procurement types. */
 
+/**
+ * A purchase order's status (0089).
+ *
+ * THREE LIVE ONES — Creation (`auto_generated`/`draft`), `procured`, `paid` —
+ * plus `received` once the store manager checks the goods in, and `cancelled`.
+ *
+ * The four below the line are RETIRED. Nothing writes them any more: the store
+ * manager procures and the accountant pays, with no owner approval and no
+ * separate handover press. They stay in the union because rows created before
+ * 0089 still carry them and the app has to render those without crashing.
+ */
 export type PoStatus =
   | 'auto_generated'
   | 'draft'
+  | 'procured'
+  | 'paid'
+  | 'received'
+  | 'cancelled'
+  // Retired — historical rows only.
   | 'executed'
   | 'awaiting_approval'
   | 'approved'
-  | 'paid'
-  | 'handed_over'
-  | 'received'
-  | 'cancelled';
+  | 'handed_over';
+
+/** The three the PO detail screen shows as a progress track. */
+export const PO_FLOW: { key: 'creation' | 'procured' | 'paid'; label: string }[] = [
+  { key: 'creation', label: 'Creation' },
+  { key: 'procured', label: 'Procured' },
+  { key: 'paid', label: 'Paid' },
+];
+
+/** Which of the three steps a status sits at — retired statuses map onto the new ones. */
+export function poFlowStep(status: PoStatus): 0 | 1 | 2 {
+  if (status === 'auto_generated' || status === 'draft') return 0;
+  if (status === 'procured' || status === 'executed'
+      || status === 'awaiting_approval' || status === 'approved') return 1;
+  return 2; // paid / handed_over / received / cancelled
+}
 
 export type GrnStatus = 'pending' | 'confirmed' | 'rejected';
 
@@ -45,6 +73,9 @@ export interface PurchaseOrder {
   amount: number | null;
   notes: string | null;
   executed_at: string | null;
+  /** Set when the store manager marks it Procured (0089). */
+  procured_at?: string | null;
+  procured_by?: string | null;
   approved_at: string | null;
   paid_at: string | null;
   created_at: string;
@@ -175,15 +206,19 @@ export interface PendingMaterialIssueRow {
 // ---- Display ----
 
 export const PO_STATUS_LABEL: Record<PoStatus, string> = {
-  auto_generated: 'Auto-generated',
-  draft: 'Draft',
-  executed: 'Executed',
-  awaiting_approval: 'Awaiting Owner Approval',
-  approved: 'Approved',
-  paid: 'Awaiting Handover',
-  handed_over: 'Handed Over',
+  auto_generated: 'Creation',
+  draft: 'Creation',
+  procured: 'Procured',
+  paid: 'Paid',
   received: 'Received',
   cancelled: 'Cancelled',
+  // Retired (0089). Labelled as the step they collapsed into, so a historical
+  // row reads as part of the same three-status flow rather than as a fourth
+  // state nobody recognises.
+  executed: 'Procured',
+  awaiting_approval: 'Procured',
+  approved: 'Procured',
+  handed_over: 'Paid',
 };
 
 export const MOVEMENT_LABEL: Record<MovementType, string> = {

@@ -986,6 +986,576 @@ clean path (every piece passes) and is what covers the loop end to end.
 
 ---
 
+## Super Admin restructure + Masters/roles changes — (migrations pending, UI verified 2026-08-20)
+
+Two migrations, applied in the SQL editor in order:
+
+```
+0085_super_admin_restructure.sql
+0086_masters_partner_link_and_roles.sql
+```
+
+`npm run check:migrations` reports both once pasted. The UI is verified in a
+real browser by two new scripts — build, serve, drive:
+
+```
+npm run build:web
+node scripts/serve-dist.mjs 8090       # separate shell
+npm run verify:superadmin              # 21 checks
+npm run verify:masters                 # 23 checks
+```
+
+### 0085 — Super Admin: 3 tabs, platform billing, no inventory
+
+**Super Admin's inventory access is withdrawn.** 0028 revoked its blanket read
+on business data and granted it back on exactly two tables so a colour-stock tab
+could exist. That exception is gone: the two additive policies
+(`thread_stock_super_admin_read` — which, after 0068's rename, lives on
+`inventory_items` under its original name — and `stock_movements_super_admin_read`)
+are dropped, and so are `sa_factory_inventory()` and `sa_last_audit()`. Dropping
+the policies alone would not have closed it: both readers were SECURITY DEFINER
+and bypassed RLS by design.
+
+**`factory_invoices`** is the new platform billing ledger — one row per cycle per
+factory, super-admin-only by RLS. `factories.subscription_status` is now DERIVED
+from it (`sync_factory_subscription_status`, called on every ledger write), so
+the Paid/Unpaid pill on the factory list cannot disagree with the invoices.
+Existing factories are backfilled with two settled invoices and, where their pill
+already said unpaid, one open one.
+
+Super Admin is now exactly three top-level tabs — Dashboard (Factories +
+Billing), Modules, Invoice History — and each factory row carries a ⋮ menu with
+four options: View details, Set active/inactive (behind a real confirmation),
+Payment history, Edit. The row itself is no longer tappable.
+
+`ConfirmDialog` was added because `Alert.alert` is a **no-op on
+react-native-web**: every destructive confirm written with it was, on web, not
+appearing at all. Deactivating a factory blocks login for all its users, so that
+one has to be real.
+
+### 0086 — Masters fields, the partner link, and the employee roles
+
+| Card | Change |
+|---|---|
+| Client | `price` dropped (column and field); `billing_date` added, on a calendar picker. `acct_client_summary` is rewritten with billing_date in price's slot, so the accountant's Clients screen keeps a fact in that tile. |
+| Supplier | `inventory_types text[]` — which of thread/tilla/sequin/bobbin they are a source for. An array, not a join table: the vocabulary is fixed and nothing queries FROM it. |
+| Machine | The eleven-way type selector is gone; the card is one field, the machine number (`machines.name`, which every other screen already identifies a machine by). `machines.machine_type` keeps its NOT NULL default so existing rows and the accountant's fleet screen are untouched. The machine-type list filter went with the selector. |
+| Finishing Partner | No login, no "extended partner". One persistent `access_token` per partner instead, shown/copied/shared from the card. |
+
+**The partner link.** `?partner=<token>` (also accepted: `/partner/<token>`) is
+read by RootNavigator *before* the auth branch, so a partner opening their
+bookmark never sees the login screen. It is served by three SECURITY DEFINER
+functions granted to `anon` — `partner_portal_info`, `partner_portal_work`,
+`partner_portal_mark_ready` — each of which resolves the token to one
+`finishing_partners` row and refuses everything else. **No table is granted to
+`anon`.** Archiving the partner revokes the link, because `deleted_at is null`
+is part of every lookup. On native builds set `EXPO_PUBLIC_APP_BASE_URL` so the
+card can build a full URL; without it the card shows the token and says so
+rather than handing over a link that 404s.
+
+**Employee roles.** "Order Taker" + "Delivery Person" became one option,
+`order_delivery`. It is a real role on the profile, not a UI grouping — and it
+did NOT require rewriting the 74 places that check for `order_taker` or
+`delivery`, because all of them route through `has_any_role` (`assert_role` is a
+thin wrapper over it). Teaching that one function to expand `order_delivery` via
+a new `effective_roles()` makes every existing check accept the merged role.
+
+The only gates that do not go through `has_any_role` are `my_queue_summary` and
+`my_queue_items`, which branch on `current_user_role()` directly. Both are
+recreated in 0086 from their 0084 bodies with one mechanical substitution
+throughout — `v_role = 'x'` → `('x' = any(v_roles))`, `v_role in (...)` →
+`v_roles && array[...]` — so a merged user gets the order taker's banner AND all
+five delivery banners, each correctly marked `own_task`.
+
+"Manager" is no longer an option: Floor Manager and Store Manager are picked
+directly, which retires 0033's second "which kind of manager?" question. "Initial
+QA" is "QA" again, in `roles.name`, the role badge, the picker, and the Returns
+and Orders-box copy.
+
+### Known gaps, stated rather than hidden
+
+- **`sa_update_factory` coalesces every argument onto the existing value**, so a
+  null means "leave alone", not "unset". The Edit Factory screen therefore does
+  not offer Clear on the billing date — the control would have done nothing.
+- **Finishing partners created before 0086 keep their login**, and the
+  `finishing_partner` navigator is still registered for them. The card no longer
+  creates or links accounts; `finishing_partners.user_id` survives only so those
+  rows keep resolving.
+- **`vendors.price` is dropped.** Re-running 0031 after 0086 would put the old
+  `acct_client_summary` (which selects `price`) back on the REST surface and
+  break the accountant's Clients screen.
+
+---
+
+## Order Taker timeline photos + QA simplification — (migration pending, UI verified 2026-08-20)
+
+One migration, applied after 0086:
+
+```
+0087_timeline_photos_and_qa_simplification.sql
+```
+
+```
+npm run build:web
+node scripts/serve-dist.mjs 8090       # separate shell
+npm run verify:qaflow                  # 30 checks, real browser
+npm run verify:returns                 # 11 checks, two order-taker logins
+```
+
+### Timeline photos
+
+`order_timeline()` returns a sixth column, `photo_url`, so the Order Taker's
+progress tracker shows the evidence at each step and not only its status. Every
+photo comes from a column that already existed — nothing new is captured:
+
+| Step | Photo |
+|---|---|
+| Order captured | `orders.cloth_photos[1]` |
+| Awaiting procurement | newest `purchase_orders.bill_url` |
+| Cloth inspection | newest `damage_records.photo_url` for the consignment, falling back to the cloth photo when it was accepted clean |
+| QA repeat coding | newest `repeat_stage_history.photo_url` at `coded` |
+| Job card | `orders.design_sheet_url` |
+| each production/finishing stage | newest `repeat_stage_history.photo_url` at that stage |
+| Delivery to vendor | `orders.delivery_photo_url` |
+
+They are storage PATHS, not URLs. `OrderDetailScreen` resolves them in the same
+batched `createSignedUrls` call it already makes for the order's photo strip,
+de-duplicated because the cloth photo appears in both. Returning a signed URL
+from SQL would bake an expiry into a cached query result.
+
+The delivery step also stopped being hardcoded `'ahead'`, which it had been
+since 0008 — it now reads `orders.delivered_at`.
+
+### "Repeats", not "sheets"
+
+Audited against live data first, because the obvious reading of the brief would
+have been wrong: ALP-00001 has **2 sheets and 4 repeats**, so relabelling the
+sheet count "repeats" would have printed the wrong number. Confirmed with the
+user, and the resolution is that **the order taker's summaries count repeats
+only**. `sheets` stays exactly as it is as the row shape — it is just not a
+quantity the order taker chose or can act on.
+
+Changed: the orders list row, the New Order review (per-colour line and totals —
+"Total sheets" is gone), the order detail summary (now grouped **by colour**, so
+two sheets of one colour are one line with their repeats added), the QA queue
+row, the cloth-damage picker ("Which cloth?", options named by colour), and the
+`captured` line in `order_timeline`. Verified in the browser against real rows:
+the list reads `1 repeat … 4 repeats`, matching the database exactly.
+
+### "Other" colour
+
+The twelve-swatch palette is a shortcut, not the vocabulary. The picker has an
+Other cell that opens a name + code form; the code is upper-cased and flows
+through to the job card and the thread check like any preset. A typed colour
+carries no hex, so its chip renders neutral rather than inventing a shade
+nobody picked, and the review line labels it `custom colour PCK-21`.
+
+### QA: one flow, one final gate
+
+**Cloth inspection is a step, not a screen.** `ClothInspectionScreen` is gone;
+its work moved into `ClothInspectionStep`, rendered at the top of Order QA's
+Repeat QA tab when the order is still `awaiting_cloth_inspection`. Accepting the
+cloth no longer navigates — the piece list below it unlocks in place. The
+inspection queue lost its two counters and its status-based routing: one list,
+one destination, and which step it opens on is the order's business.
+
+**Write Off is gone from QA's reject flow** — Reject is the only outcome, with
+the reason/photo/notes it always had.
+
+> **This reopens a dead end, deliberately.** Write-off was added because a vendor
+> who never returns a rejected piece holds its order at `awaiting_coding`
+> forever; 0059 built the return loop and nothing ended it. `qa_write_off_piece`
+> is therefore **still in the database** with no caller, so the escape can be
+> given to another role without a schema change. Dropping it would have
+> destroyed the capability along with the button.
+
+**Final QA is the Floor Manager's, alone.** 0056 had made it two gates; QA's
+card, screen, route, queue key and both RPCs (`qa_final_pass`, `qa_final_queue`)
+are dropped. `fm_final_qa_pass` now COMPLETES the repeat and readies its order
+for delivery, and inherits the photo requirement 0062 put on QA's gate — per
+repeat, which is why "Pass all remaining" was removed rather than made to attach
+one photo to every piece.
+
+Pieces already at `awaiting_qa_final` when 0087 runs are **not** auto-completed —
+that would fabricate a sign-off. Instead `fm_final_qa_queue`, `fm_final_qa_pass`
+and the `fm_final_qa` banner all accept that status too, so the Floor Manager
+sees them and finishes them properly.
+
+### Complete Return: verified, not changed
+
+`ot_complete_return` (0036) and `ot_complete_qa_return` (0059) already compared
+`orders.created_by` to `auth.uid()`. `npm run verify:returns` proves it fires
+rather than assuming it, with a differential against a real rejected piece: the
+script creates a second order taker, has the first capture an order that QA then
+rejects a piece on, and calls the same RPC on the same row as both users.
+
+```
+order2@alpha.test: 404 Rejected piece not found.        <- ownership gate fired
+order@alpha.test:  400 A photo of the piece ... required <- got past it
+```
+
+`ot_return_repeats` never lists another order taker's rows either, so the board
+does not leak the row it would refuse to act on.
+
+---
+
+## Floor Manager job card + PO ownership — (migrations pending, UI verified 2026-08-20)
+
+Two migrations, applied after 0087:
+
+```
+0088_fm_order_people_and_auto_material.sql
+0089_store_manager_owns_pos.sql
+```
+
+```
+npm run build:web
+node scripts/serve-dist.mjs 8090       # separate shell
+npm run verify:fmpo                    # 44 checks, real browser
+```
+
+### Job card creation
+
+**The stage sequence is a fixed set, not a list you build.** Four stages in
+process order; Embroidery and Clipping are locked on and cannot be deselected;
+Press and Piko toggle. No "+ Add stage" dropdown, no "selection order becomes the
+processing sequence" text, and no per-stage handled-by / SLA block.
+
+`fm_set_stage_sequence` still takes those fields, so **the caller supplies the
+defaults** rather than the RPC baking them in — one writer, one shape:
+
+| Field | Default | Why |
+|---|---|---|
+| `is_outsourced` | `false` for stage 1, `true` after | 0084's model: embroidery runs on the factory's machines, every later stage is a finishing partner's |
+| `sla_hours` | `24` | the value the old form pre-filled and nobody changed |
+| `partner_id` | `null` | `fm_hand_over_stage` names the partner **per piece** when the work is released; choosing one here fixes a routing decision weeks early |
+
+**Needles now come before design details.** The flow is: design photo + stages →
+needle/colour lines → design details → submit. That is what the brief asked for
+and it also fixes a dependency that was backwards: `job_card_lines.stitch_count`
+is per repeat, so the sum of the needle lines IS "stitches per repeat" — the
+field now pre-fills from that sum instead of being guessed at first.
+
+> **Trade-off, stated:** generating lines before the per-repeat figure exists
+> means 0083's auto-fill has nothing to divide, so new lines start at 0 stitches
+> and the floor manager types each. That is the cost of the reorder; the review
+> screen makes both the needle counts and their consequence visible on one page,
+> which is where the number actually gets checked.
+
+### Job card detail
+
+Four actions at the top — **Regenerate, Download, Share on WhatsApp, Client
+Approved** — above anything that scrolls. "Client informed" is **"Client
+Approved"**, and pressing it now requests the material too: 0088 folds
+`material_requested_at` into `fm_mark_vendor_informed`, so the separate "Ask for
+material" button is gone. `fm_ask_for_material` is kept with no caller as the
+manual repair for a card confirmed before the change; section 3 of 0088
+backfills the ones that already exist.
+
+The stage sequence is **one arrow-connected line** ("Embroidery → Clipping")
+rather than a numbered card per stage carrying its own SLA.
+
+**A latent hooks bug was fixed while in there:** `JobCardScreen` queried the
+colour requirement *below* its loading early-return, so the first render bailed
+out before that hook and the next called one more — React tears the screen down
+with "rendered more hooks than during the previous render". Same class of bug as
+the one the order-detail rework hit, now fixed in both.
+
+### Review screen
+
+Shows **Inventory needed** — the per-colour Stitches / Cones / Short table from
+`order_color_requirements`, moved up from the job card detail. A wrong stitch
+figure is now visible while it is being typed, not after it has become a
+purchase order. There is no progress timeline on this screen; there never was
+one, and none was added.
+
+### Order detail: three tabs
+
+`FmOrderDetailScreen` — **Order Details / Job Card / Progress**. The floor
+manager used to land on the ORDER TAKER's read-only tracker, which answers a
+different person's question.
+
+- **Order Details** reads `fm_order_people` (0088): order taker, QA, floor
+  manager, machine, every delivery person and every finishing partner, each with
+  the time they first touched the order. All derived from existing history —
+  nothing new is recorded to support it.
+- **Job Card** routes to the builder or the detail screen. It does not
+  re-implement either; a third copy is a third thing to keep correct.
+- **Progress** toggles order-level (`order_timeline`) against repeat-level (one
+  row per repeat). Built as structure so the status-machine prompt fills a list
+  rather than rebuilding a screen.
+
+The **Master data → Vendors** shortcut is gone from the Overview tab.
+
+### PO flow: Creation → Procured → Paid
+
+```
+before:  draft → executed → awaiting_approval → approved → paid → handed_over → received
+          proc     proc         proc            OWNER      acct      proc         store
+
+after:   Creation ─────────▶ Procured ─────────▶ Paid ────▶ received
+          store manager       accountant                     store manager
+```
+
+**The owner-approval step is removed, not bypassed.** `po_owner_approve` is
+dropped and 0083's PO branch comes back out of `owner_approvals_queue` —
+expenses, damage and bonus slabs keep theirs. Verified that the branch being
+removed is live: the Alpha owner's inbox returns
+`["damage","purchase_order","damage"]` today, and must return the two damages
+after 0089.
+
+**Procurement is read-only.** `po_execute`, `po_upload_bill`, `po_owner_approve`
+and `po_handover_to_store` are **dropped**, not hidden — each was SECURITY
+DEFINER and callable straight over REST, so removing the buttons alone would
+have left the transitions open. Their dashboard is two tabs (Pending /
+Completed) reading `proc_po_list`, and PO detail offers them one verb: save or
+share as PDF. `NewPoScreen` is deleted; the store manager raises POs.
+
+**Who raises the GRN now.** `po_handover_to_store` was procurement's, and it was
+what put a PO's goods in front of the store manager. With that press ownerless,
+`acct_record_payment` creates the GRN in the same transaction that marks the PO
+paid. Section 5 of 0089 backfills GRNs for POs already `paid` with none.
+
+`acct_record_payment` also stopped writing a payment against a PO in the wrong
+state: it used to insert the row whatever the status was and only move the PO if
+it happened to be `approved`, so paying early left money posted against a PO
+that still read as unpaid.
+
+**In-flight rows are migrated, not stranded.** `executed` /
+`awaiting_approval` / `approved` all mean the same thing under the new flow and
+become `procured`; `handed_over` becomes `paid`. The retired statuses stay in
+the CHECK constraint so historical rows remain valid, and `PO_STATUS_LABEL` maps
+each onto the step it collapsed into so an old row reads as part of the same
+three-status flow.
+
+Banners follow: the three procurement PO banners are replaced by one
+`sm_po_procure` for the store manager.
+
+### Not verified yet
+
+`proc_po_list` and `fm_order_people` are new RPCs, so until 0088/0089 are
+applied the procurement list renders empty and the Order Details tab shows only
+its repeat/colour counts. Everything else in the walk above was driven against
+the live Alpha data.
+
+---
+
+## Granular status board — (0085–0089 APPLIED and verified; 0090 pending)
+
+```
+0090_granular_status_board.sql        <- the only one still to paste
+```
+
+```
+npm run verify:status                 # walks one order through every transition
+npm run verify:fmpo                   # 49 checks, browser + RPC
+```
+
+### It adds no state
+
+Every label is DERIVED from `repeats.current_status` + `repeats.current_stage_index`
+against the order's own `order_stages`. No new column, no new transition, no
+second place a piece's position is recorded — a parallel tracker is a second
+answer to "where is this piece", and the two always end up disagreeing.
+
+`current_stage_index` is the stage a piece has **last cleared**, not the one it
+is heading for; `fm_confirm_collection` increments it when the piece comes back
+on the floor. So through the whole handover/partner/pickup leg it still reads S
+while the work being done is stage S+1, which is why the four transit statuses
+resolve against S+1:
+
+| status | index | label |
+|---|---|---|
+| `ready_for_production` | S | Awaiting *S* |
+| `in_progress` | S | In *S* |
+| `stage_qa` | S | Repeat Inspection after *S* |
+| `handover_for_delivery` | S | With Manager after *S* |
+| `awaiting_dp_collection` | S | Handover to *S+1* - In Delivery |
+| `handed_over` | S | Handover to *S+1* - In Delivery |
+| `handed_off` | S | In *S+1* |
+| `returned_to_delivery` | S | In Pickup from *S+1* |
+| `awaiting_fm_collection` | S | In Pickup from *S+1* |
+| `awaiting_final_qa` | — | Final Inspection by Manager |
+| `completed` | — | Ready to Deliver / Delivered |
+
+Two pairs collapse to one label on purpose. `awaiting_dp_collection` and
+`handed_over` are the delivery person's Collection and Delivery tabs, and from
+the floor's side both mean "it left me and has not reached the partner"; same
+for `returned_to_delivery` / `awaiting_fm_collection`.
+
+### The mapping is proven by walking it, not by reading it
+
+`npm run verify:status` captures one order, drives it through **every**
+transition with six real logins and the real RPCs, reads
+`(current_status, current_stage_index)` back after each one, and asserts the
+derived sequence is exactly the brief's. Output from the live Alpha factory:
+
+```
+client approved              ready_for_production @0  ->  Awaiting Embroidery
+production started           in_progress @1           ->  In Embroidery
+sent to stage QA             stage_qa @1              ->  Repeat Inspection after Embroidery
+stage QA passed              handover_for_delivery @1 ->  With Manager after Embroidery
+handed over                  awaiting_dp_collection @1->  Handover to Clipping - In Delivery
+collected from floor         handed_over @1           ->  Handover to Clipping - In Delivery
+given to the partner         handed_off @1            ->  In Clipping
+collected from partner       returned_to_delivery @1  ->  In Pickup from Clipping
+handed back to floor         awaiting_fm_collection @1->  In Pickup from Clipping
+collection confirmed         stage_qa @2              ->  Repeat Inspection after Clipping
+stage QA passed (last stage) awaiting_final_qa @2     ->  Final Inspection by Manager
+final QA passed              completed @2             ->  Ready to Deliver
+```
+
+Note `@0` on the first row: `current_stage_index` is 0 until production starts,
+which is why `repeat_status_key` clamps with `greatest(index, 1)`.
+
+The JS `key()` in that script is a deliberate SECOND copy of
+`public.repeat_status_key`. If the two ever drift, the cross-check against
+`fm_repeat_status_board` at the bottom of the same script fails.
+
+### Where it lives, and who sees it
+
+The Progress tab of `FmOrderDetailScreen`, with an Order / Repeats toggle. Order
+rows carry a live count; repeat rows are grouped under the status they share.
+Photos come from the mechanics that already capture them — collection, handover,
+pickup and Stage QA — and open full-size on tap.
+
+`assert_role(array['floor_manager','company_admin'])` sits in **both** RPCs, so
+the restriction is in the database rather than in a screen other roles have no
+route to.
+
+**The owner now has the floor routes.** `canJobCard` gained `company_admin`:
+they had no route to an order at all, which also left their own task banners
+("3 orders need a job card") pointing at screens their navigator never
+registered. Every RPC behind those screens already accepted `company_admin` —
+only the routes were missing.
+
+**Tapping an order in production now opens the three tabs too.** It used to go
+straight to Stage Tracking, which meant the one order the status board is most
+useful for was the one you could not reach it from. Stage Tracking is a button
+on the Progress tab instead — the board is a read, and the piece-by-piece
+actions belong on the screen that has always held them.
+
+### Verified against the live database (0085–0089 applied)
+
+- Owner's Approvals Inbox returns `["damage","damage"]` — it returned
+  `["damage","purchase_order","damage"]` before 0089. The PO branch is gone and
+  the others survive.
+- Procurement's Pending holds `PO-ALP-00002=auto_generated` and
+  `PO-ALP-00001=procured`; Completed is empty. `PO-ALP-00001` was
+  `awaiting_approval` before the migration — the stranded-PO case, migrated.
+- The accountant's payables lists only the `procured` one.
+- `fm_ask_for_material` now refuses with "Material has already been requested" —
+  Client Approved did it, as 0088 intended.
+
+### Still unverified
+
+0090 itself. Until it is applied the Progress tab renders its toggle and reports
+the missing function rather than crashing, and `verify:status` says so and skips
+the board assertions. Re-run `npm run verify:status` after pasting it: the
+remaining checks cover the order-board labels, the per-stage counts adding up to
+the repeat count, photos surfacing, and the four other roles being refused both
+RPCs.
+
+---
+
+## Key Metrics Grid on every dashboard — (0085–0090 APPLIED and verified; 0091 pending)
+
+```
+0091_partner_portal_stats.sql         <- the only one still to paste
+npm run verify:stats                  # 22 checks, browser, all 11 roles
+```
+
+No new visual pattern: every card is the existing `StatCard`/`StatGrid` from
+`components/ui/StatGrid.tsx`, in the place that component already sits — below
+the header and banners, above the navigation cards.
+
+| Role | Cards |
+|---|---|
+| Super Admin | Total factories · Active factories · Unpaid subscriptions · Pending amount |
+| Company Admin | Active orders · Invoiced this month · Pending approvals · Damage records |
+| Accountant | Payables due · Receivables due · POs awaiting payment · Pending salary runs |
+| Floor Manager | Active orders · Awaiting job card · Repeats in production · Pending stage QA |
+| Store Manager | Pending material requests · POs in progress · Low stock items · Today's audit |
+| QA | Orders awaiting QA · Orders in production · Rejected, awaiting return |
+| Order Taker | Active orders · Awaiting cloth inspection · Active returns |
+| Procurement | Pending POs · Completed POs |
+| Delivery Person | In Collection · In Delivery · In Pickup |
+| Worker | Stitches this period · Earnings this period · Bonus earned · Leave days approved |
+| Finishing Partner | Active work items · Completed this month · Earnings this month |
+
+### Liveness is proved by moving a number
+
+Presence checks pass against a grid of hard-coded zeroes, so `verify:stats`
+reads QA's "Orders awaiting QA", captures and submits an order through the real
+RPCs, signs back in (a reload would serve React Query's cache) and re-reads it:
+
+```
+QA "Orders awaiting QA" reads 3 before the change
+captured ALP-00022 — it now awaits cloth inspection
+and 4 after
+```
+
+### Where a number needed a workaround
+
+Three, all flagged rather than invented:
+
+- **Company Admin, "Invoiced this month"** — the brief says "revenue this
+  month". Money *collected* per month is not a figure any live query returns;
+  `report_company_pl` would give it but is a heavier report and module-gated
+  behind `finance_reports`. The card sums `invoices.issued_at` within the
+  current month and is **labelled what it is**.
+- **Accountant, "Payables due"** — suppliers + finishing partners, the two
+  ledgers the Invoices screen already loads. Approved expenses are not folded
+  in: `acct_payable_expenses` is per-category, so including them costs two more
+  round-trips for a figure that screen already breaks out properly.
+- **Worker, "Leave days approved"** — there is no leave BALANCE in this system.
+  No entitlement is configured per employee, so nothing can be counted down
+  from. The card shows days approved, and says so.
+
+### Two bugs this surfaced
+
+**The store manager's request count was the floor manager's queue.** The
+existing "Requests" card counted every pending row in `material_requests` — 21
+of the 22 pending rows are `auto_stock_ready` notices directed at the FLOOR
+manager ("your material is already in stock"). Only 1 was the store manager's.
+Now filtered on `directed_to = 'store_manager'`, which fixes the pre-existing
+card as well as the new one.
+
+**A worker with no ledger row read "—" for everything.** `getWorkerLatestLedger`
+returns null both while loading and when the worker has no row for the period.
+Those are different facts, and an em-dash told a worker who has not been paid
+yet that the app did not know. Loading still reads "—"; loaded-but-empty reads 0.
+
+### Not covered
+
+`manager` and `labour` have no dashboard — they fall through to the generic
+`RoleHomeScreen` shell, and neither appears in the brief's list. There is no
+role-specific number to put on a placeholder; they need a dashboard first.
+
+The **merged Order/Delivery Person** sees the Order Taker grid on their home and
+the Delivery grid on their Deliveries screen — one grid per job, each on the
+screen for that job, rather than six cards stacked on one dashboard.
+
+### Status: everything else is now applied and verified
+
+0090 landed between runs, so the granular status board is fully proved against
+live data — all 17 order-board labels, the stages this order never had correctly
+absent, no "With Manager" row after the last stage, the per-stage counts adding
+up to the repeat count, 11 rows carrying photos, and the visibility rule:
+
+```
+the OWNER can read the status board
+qa is refused both boards (403/403)
+store is refused both boards (403/403)
+delivery is refused both boards (403/403)
+order is refused both boards (403/403)
+```
+
+0091 is the only migration outstanding. Until it is pasted the partner's three
+cards render and read "—"; `verify:stats` says so rather than passing quietly.
+
+---
+
 ## Project structure
 
 ```

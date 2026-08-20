@@ -1,11 +1,17 @@
 /**
- * Initial QA Dashboard — two boxes.
+ * QA Dashboard — two boxes.
  *
- * "Awaiting order inspection" is the entry point for cloth inspection and
- * repeat coding (InspectionQueueScreen). "Repeats & stage tracking" is the
- * second entry point (Stage 9) — without it, QA has no route to any order
- * once it moves past coding into production, and therefore no way to reach
- * the Pass QA / Mark damage actions the spec requires QA to own.
+ * "Awaiting order inspection" is the ONE entry point into the inspection and
+ * coding flow: cloth inspection and repeat coding are steps inside it, not
+ * separate queues to choose between. "Repeats & stage tracking" is the second
+ * box — without it, QA has no route to any order once it moves past coding into
+ * production, and therefore no way to reach the Pass QA / Mark damage actions
+ * the spec requires QA to own.
+ *
+ * FINAL QA IS NOT HERE. It was a third box, and the second of two final gates.
+ * Final QA is the Floor Manager's step now and QA has no part in it — 0087
+ * dropped `qa_final_pass` outright, so this is a removed capability rather than
+ * a hidden card.
  */
 import React, { useMemo, useState } from 'react';
 import { View, Text, ScrollView, StyleSheet } from 'react-native';
@@ -15,8 +21,9 @@ import { Screen } from '../../components/ui/Screen';
 import { DashboardHeader } from '../../components/ui/DashboardHeader';
 import { TaskBanners } from '../../components/ui/TaskBanners';
 import { MasterCard, CardGrid, type MasterCardProps } from '../../components/ui/MasterCard';
-import { listOrders } from '../../api/endpoints/orders';
-import { listQaFinalQueue } from '../../api/endpoints/stageHandover';
+import { StatCard, StatGrid } from '../../components/ui/StatGrid';
+import { statCount } from '../../utils/statValue';
+import { listOrders, listFactoryDamage } from '../../api/endpoints/orders';
 import { matchesSearch } from '../../utils/search';
 import { colors, spacing, fontSize } from '../../constants/theme';
 
@@ -35,16 +42,33 @@ export function QaDashboardScreen() {
     queryKey: ['orders', 'qaStageTracking'],
     queryFn: () => listOrders(STAGE_TRACKING_STATUSES),
   });
-  const { data: finalQueue } = useQuery({
-    queryKey: ['qaFinalQueue'],
-    queryFn: listQaFinalQueue,
+  /**
+   * Three, not four. QA's work is two queues and the pieces bouncing between
+   * them — inventing a fourth figure would mean showing a number this role does
+   * not act on.
+   *
+   * The rejected count reads `damage_records` directly, which is the same table
+   * the Repeat QA tab already renders from; `recheck_state` is what 0059 added
+   * to track the reject/return loop.
+   */
+  const rejected = useQuery({
+    queryKey: ['qaRejectedAwaitingReturn'],
+    queryFn: async () => {
+      const rows = await listFactoryDamage();
+      return rows.filter(
+        (d: any) =>
+          d.stage_type === 'repeat_qa' &&
+          d.repeat_id === null &&
+          (d.recheck_state ?? 'awaiting_return') === 'awaiting_return'
+      ).length;
+    },
   });
 
   const cards: (MasterCardProps & { key: string })[] = [
     {
       key: 'inspection',
       label: 'Awaiting order inspection',
-      subtitle: 'Orders waiting on cloth inspection or repeat coding',
+      subtitle: 'Check the cloth, then inspect every piece — one flow per order',
       icon: 'shield-checkmark-outline',
       accent: colors.accent,
       count: data?.length ?? null,
@@ -59,23 +83,11 @@ export function QaDashboardScreen() {
       count: inProduction?.length ?? null,
       onPress: () => navigation.navigate('StageTrackingQueue'),
     },
-    // The second of the two final gates. Without a route here, a repeat the
-    // Floor Manager has signed off would sit at awaiting_qa_final forever and
-    // its order could never be invoiced.
-    {
-      key: 'finalPass',
-      label: 'Final pass',
-      subtitle: 'Cleared by the Floor Manager — the pass that completes a piece',
-      icon: 'checkmark-done-outline',
-      accent: colors.accent,
-      count: finalQueue?.length ?? null,
-      onPress: () => navigation.navigate('FinalPassQueue'),
-    },
   ];
 
   const visible = useMemo(
     () => cards.filter((c) => matchesSearch(search, c.label, c.subtitle)),
-    [search, data, inProduction, finalQueue]
+    [search, data, inProduction]
   );
 
   return (
@@ -88,6 +100,30 @@ export function QaDashboardScreen() {
       />
       <ScrollView contentContainerStyle={styles.container}>
         <TaskBanners />
+
+        <View style={styles.metrics}>
+          <StatGrid>
+            <StatCard
+              label="Orders awaiting QA"
+              value={statCount(data?.length)}
+              icon="shield-checkmark-outline"
+              tone={data?.length ? 'attention' : 'neutral'}
+              onPress={() => navigation.navigate('InspectionQueue')}
+            />
+            <StatCard
+              label="Orders in production"
+              value={statCount(inProduction?.length)}
+              icon="layers-outline"
+              onPress={() => navigation.navigate('StageTrackingQueue')}
+            />
+            <StatCard
+              label="Rejected, awaiting return"
+              value={statCount(rejected.data)}
+              icon="return-up-back-outline"
+              tone={rejected.data ? 'attention' : 'neutral'}
+            />
+          </StatGrid>
+        </View>
         <CardGrid>
           {visible.map(({ key, ...card }) => (
             <MasterCard key={key} {...card} />
@@ -102,6 +138,7 @@ export function QaDashboardScreen() {
 }
 
 const styles = StyleSheet.create({
+  metrics: { marginBottom: spacing.lg },
   container: { padding: spacing.lg, paddingTop: spacing.xl },
   banner: { marginBottom: spacing.lg },
   empty: {

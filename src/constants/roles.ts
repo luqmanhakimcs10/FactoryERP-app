@@ -1,7 +1,15 @@
 /**
- * The 13 user roles and the 4 toggleable modules.
- * Role keys MUST match the CHECK constraint on profiles.role in the DB migration.
+ * The user roles and the 4 toggleable modules.
+ * Role keys MUST match `roles.key` in the DB (profiles.role is an FK to it).
  * Module keys MUST match modules.key in the DB.
+ *
+ * ORDER_DELIVERY is the merged Order Taker + Delivery Person (0086). It is a
+ * real role on the profile, not a UI grouping: `has_any_role` expands it to
+ * satisfy every existing `order_taker` and `delivery` check in the database, so
+ * one account genuinely does both jobs.
+ *
+ * ORDER_TAKER and DELIVERY are kept because accounts created before the merge
+ * still hold them — the employee picker no longer offers either.
  */
 
 export const ROLES = {
@@ -11,6 +19,7 @@ export const ROLES = {
   FLOOR_MANAGER: 'floor_manager',
   STORE_MANAGER: 'store_manager',
   ORDER_TAKER: 'order_taker',
+  ORDER_DELIVERY: 'order_delivery',
   QA: 'qa',
   PROCUREMENT: 'procurement',
   DELIVERY: 'delivery',
@@ -32,7 +41,9 @@ export const ROLE_LABEL: Record<Role, string> = {
   floor_manager: 'Floor Manager',
   store_manager: 'Store Manager',
   order_taker: 'Order Taker',
-  qa: 'Initial QA',
+  order_delivery: 'Order/Delivery Person',
+  // Reverted from "Initial QA": this role does every QA pass, not the first one.
+  qa: 'QA',
   procurement: 'Procurement',
   delivery: 'Delivery',
   worker: 'Worker',
@@ -49,6 +60,7 @@ export const ROLE_HOME_TITLE: Record<Role, string> = {
   floor_manager: "Today's Floor",
   store_manager: 'Stock Home',
   order_taker: 'Dashboard',
+  order_delivery: 'Dashboard',
   qa: 'Inspection Queue',
   procurement: 'PO Queue',
   delivery: 'Orders',

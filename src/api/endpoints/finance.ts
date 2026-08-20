@@ -159,9 +159,20 @@ export async function getFinalQaQueue(): Promise<FinalQaRow[]> {
   return (data ?? []) as FinalQaRow[];
 }
 
-export async function finalQaPass(repeatId: string, note?: string | null) {
+/**
+ * The pass that COMPLETES a repeat. Floor Manager only (0087).
+ *
+ * It used to be the first of two gates, handing the piece to QA. QA is out of
+ * this step now, so this call is what finishes it — and it inherits the photo
+ * requirement that used to sit on QA's gate. The database refuses without one:
+ * this is the last look anyone takes at the piece before it is billed and
+ * delivered, so it is the worst place in the app to have no record of what was
+ * approved.
+ */
+export async function finalQaPass(repeatId: string, photoUrl: string, note?: string | null) {
   const { data, error } = await supabase.rpc('fm_final_qa_pass', {
     p_repeat_id: repeatId,
+    p_photo_url: photoUrl,
     p_note: note ?? null,
   });
   if (error) throw error;

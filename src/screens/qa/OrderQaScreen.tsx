@@ -1,10 +1,15 @@
 /**
- * Order QA — the screen a QA user lands on for a single order once cloth is
- * accepted (status `awaiting_coding`).
+ * Order QA — the ONE screen a QA user lands on for a single order.
  *
- * Four tabs: Repeat QA (the piece-by-piece pass/reject gate — see
- * StartQaModal and migration 0034), Job card (read-only preview; the floor
- * manager still owns building it), Repeats & stage tracking, and Damage
+ * It used to start at `awaiting_coding`, with cloth inspection living on its
+ * own screen behind its own bucket on the queue. Both steps are here now:
+ * an order still awaiting cloth inspection shows `ClothInspectionStep` at the
+ * top of the Repeat QA tab, and accepting the cloth reveals the piece list
+ * underneath it without navigating anywhere. QA has one destination per order.
+ *
+ * Four tabs: Repeat QA (cloth inspection, then the piece-by-piece pass/reject
+ * gate — see StartQaModal and migration 0034), Job card (read-only preview; the
+ * floor manager still owns building it), Repeats & stage tracking, and Damage
  * records.
  */
 import React, { useMemo, useState } from 'react';
@@ -18,6 +23,7 @@ import { StageProgress } from '../../components/ui/StageProgress';
 import { StatusPill, OrderStatusPill } from '../../components/ui/StatusPill';
 import { StageTrackingTable } from '../../components/ui/StageTrackingTable';
 import { StartQaModal } from './StartQaModal';
+import { ClothInspectionStep } from './ClothInspectionStep';
 import {
   getOrder,
   listSheets,
@@ -28,7 +34,6 @@ import {
   getOrderTimeline,
   completeRepeatQa,
 } from '../../api/endpoints/orders';
-import { writeOffPiece } from '../../api/endpoints/stageHandover';
 import { describeDbError } from '../../utils/errors';
 import { DAMAGE_TYPE_LABEL } from '../../models/orderTypes';
 import type { Sheet, Repeat, DamageRecord } from '../../models/orderTypes';
@@ -157,24 +162,11 @@ export function OrderQaScreen() {
     0
   );
   const canInspect = order?.status === 'awaiting_coding';
+  // Step 1 of the same flow. While this is true the piece list is visible but
+  // inert — QA can see what is coming without being able to act on cloth that
+  // has not been accepted yet.
+  const needsClothInspection = order?.status === 'awaiting_cloth_inspection';
   const allPassed = totalPieces > 0 && unresolved === 0 && outstanding === 0;
-
-  /**
-   * The escape hatch. A vendor who never sends a rejected piece back would
-   * otherwise hold the order at `awaiting_coding` forever — 0059 gave the piece
-   * a return loop but nothing ever ended it. Writing off closes the slot with
-   * no repeat behind it; the damage record stays exactly as it was, because
-   * this is an admission the piece is gone, not a retraction of who lost it.
-   */
-  const writeOff = useMutation({
-    mutationFn: (damageId: string) => writeOffPiece(damageId),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['damage', orderId] });
-      queryClient.invalidateQueries({ queryKey: ['returnRepeats'] });
-      queryClient.invalidateQueries({ queryKey: ['queueSummary'] });
-    },
-    onError: (e) => setCompleteError(describeDbError(e, 'Write off')),
-  });
 
   const completeMutation = useMutation({
     mutationFn: () => completeRepeatQa(orderId),
@@ -218,6 +210,8 @@ export function OrderQaScreen() {
 
       {activeTab === 'repeat_qa' ? (
         <ScrollView contentContainerStyle={styles.content}>
+          {needsClothInspection ? <ClothInspectionStep orderId={orderId} /> : null}
+
           <View style={styles.repeatQaHead}>
             <Text style={styles.sectionTitle}>Repeat QA</Text>
             <AppButton
@@ -244,6 +238,11 @@ export function OrderQaScreen() {
                       : `${passedCount} of ${totalPieces} piece${totalPieces === 1 ? '' : 's'} passed${
                           writtenOff > 0 ? `, ${writtenOff} written off` : ''
                         }.`}
+            </Text>
+          ) : needsClothInspection ? (
+            <Text style={styles.progressNote}>
+              {totalPieces} piece{totalPieces === 1 ? '' : 's'} will need inspecting once the cloth
+              is accepted above.
             </Text>
           ) : (
             <Text style={styles.progressNote}>
@@ -308,19 +307,10 @@ export function OrderQaScreen() {
                         style={styles.startBtn}
                       />
                     ) : piece.status === 'returned' && canInspect ? (
-                      <View style={{ alignItems: 'flex-end', gap: 4 }}>
-                        <Text style={styles.waiting}>With order taker</Text>
-                        <AppButton
-                          title="Write off"
-                          variant="secondary"
-                          size="sm"
-                          loading={writeOff.isPending && writeOff.variables === piece.damage.id}
-                          onPress={() => {
-                            setCompleteError(null);
-                            writeOff.mutate(piece.damage.id);
-                          }}
-                        />
-                      </View>
+                      // Reject is the only outcome QA has here. "Write off" sat
+                      // beside it and is gone — see 0087 section 4 for what that
+                      // costs and why the RPC behind it was kept.
+                      <Text style={styles.waiting}>With order taker</Text>
                     ) : (
                       <Text style={styles.dash}>—</Text>
                     )}

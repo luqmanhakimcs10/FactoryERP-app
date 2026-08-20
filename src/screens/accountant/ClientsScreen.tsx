@@ -190,7 +190,18 @@ export function AccountantClientDetailScreen() {
             <TileGrid>
               <Tile label="Rate per repeat" value={money(client?.rate_per_repeat)} />
               <Tile label="Rate per stitch" value={client?.rate_per_stitch == null ? '—' : String(client.rate_per_stitch)} />
-              <Tile label="Price" value={money(client?.price)} />
+              <Tile
+                label="Billing date"
+                value={
+                  client?.billing_date
+                    ? new Date(client.billing_date).toLocaleDateString(undefined, {
+                        day: 'numeric',
+                        month: 'short',
+                        year: 'numeric',
+                      })
+                    : '—'
+                }
+              />
             </TileGrid>
 
             <SectionTitle>Summary</SectionTitle>

@@ -1,15 +1,22 @@
 /**
- * Final QA + Invoice Prep (deferred from Phase 6).
+ * Final QA + Invoice Prep.
  *
  * The queue reads repeats whose stages are all complete — from
  * repeat_stage_history's cache, the same source of truth used since Phase 3.
  *
- * THIS IS THE FIRST OF TWO FINAL GATES (0056). The Floor Manager's pass here no
- * longer completes a repeat: it moves it to `awaiting_qa_final` and sends it to
- * QA, whose own final pass is what completes it. An invoice still requires every
- * repeat `completed`, so an order cannot be billed until QA has signed it off —
- * that is deliberate, and it is why the counter below reports how many are
- * "through QA" rather than how many this screen has passed.
+ * THIS IS THE ONLY FINAL GATE (0087). 0056 had made it the first of two, with
+ * QA's own final pass completing the piece afterwards; QA is out of this step
+ * entirely now, so a pass here is what COMPLETES a repeat and readies its order
+ * for delivery.
+ *
+ * With that, this screen inherits the requirement that used to sit on QA's
+ * gate: a photo of the finished product, per repeat. The database refuses
+ * without one. It is the last look anyone takes at the piece before it is
+ * billed and delivered.
+ *
+ * Repeats left at `awaiting_qa_final` when 0087 ran — passed here, then
+ * stranded when QA's gate was removed — are accepted by the same button, so
+ * they get finished properly rather than auto-completed by a migration.
  */
 import React, { useState } from 'react';
 import {
@@ -22,7 +29,6 @@ import {
   Pressable,
   ActivityIndicator,
   RefreshControl,
-  Platform,
 } from 'react-native';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigation, useRoute } from '@react-navigation/native';
@@ -49,19 +55,6 @@ import {
   fontFamily,
   tint,
 } from '../../constants/theme';
-
-function confirmAction(title: string, message: string, onConfirm: () => void) {
-  if (Platform.OS === 'web') {
-    if (typeof window !== 'undefined' && window.confirm(`${title}\n\n${message}`)) onConfirm();
-    return;
-  }
-  // eslint-disable-next-line @typescript-eslint/no-var-requires
-  const { Alert } = require('react-native');
-  Alert.alert(title, message, [
-    { text: 'Cancel', style: 'cancel' },
-    { text: 'Confirm', onPress: onConfirm },
-  ]);
-}
 
 // ---------------------------------------------------------------------------
 // Queue
@@ -139,6 +132,10 @@ export function FinalQaDetailScreen() {
   const orderCode: string | undefined = route.params?.orderCode;
   const { profile } = useAuth();
 
+  // The finished-product photo, per repeat. Keyed by repeat id because a pass
+  // is per piece: one shared photo would attach the same evidence to every
+  // repeat on the order, which is exactly the record this gate exists to avoid.
+  const [photos, setPhotos] = useState<Record<string, LocalPhoto[]>>({});
   const [amount, setAmount] = useState('');
   const [dueDate, setDueDate] = useState('');
   const [invoicePhoto, setInvoicePhoto] = useState<LocalPhoto[]>([]);
@@ -160,20 +157,30 @@ export function FinalQaDetailScreen() {
   }
 
   const passMutation = useMutation({
-    mutationFn: (repeatId: string) => finalQaPass(repeatId),
-    onSuccess: invalidate,
+    mutationFn: async (repeatId: string) => {
+      const shot = photos[repeatId]?.[0];
+      if (!shot) throw new Error('Attach a photo of the finished piece first.');
+      if (!profile?.factory_id) throw new Error('Your profile has no factory.');
+      const path = await uploadOrderPhoto(profile.factory_id, orderId, shot.uri, 'final-qa');
+      return finalQaPass(repeatId, path);
+    },
+    onSuccess: (_data, repeatId) => {
+      setPhotos((prev) => {
+        const next = { ...prev };
+        delete next[repeatId];
+        return next;
+      });
+      invalidate();
+    },
     onError: (e) => setError(describeDbError(e, 'Final QA')),
   });
 
-  const passAllMutation = useMutation({
-    mutationFn: async () => {
-      const pending = (repeats ?? []).filter((r) => r.current_status === 'awaiting_final_qa');
-      for (const r of pending) await finalQaPass(r.id);
-      return pending.length;
-    },
-    onSuccess: invalidate,
-    onError: (e) => setError(describeDbError(e, 'Final QA')),
-  });
+  /**
+   * "Pass all remaining" is gone. It passed every pending repeat in a loop,
+   * which cannot survive a per-piece photo requirement: the only way to keep
+   * the button would be to attach ONE photo to every piece, and a final-QA
+   * record saying all six pieces looked like this one is worse than none.
+   */
 
   // An invoice is a money record, so it carries a photo like every other one:
   // fm_generate_invoice refuses without it.
@@ -208,9 +215,9 @@ export function FinalQaDetailScreen() {
   }
 
   const rows = repeats ?? [];
-  const pending = rows.filter((r) => r.current_status === 'awaiting_final_qa');
-  // Passed here, now sitting with QA for the second gate.
-  const withQa = rows.filter((r) => r.current_status === 'awaiting_qa_final');
+  const pending = rows.filter(
+    (r) => r.current_status === 'awaiting_final_qa' || r.current_status === 'awaiting_qa_final'
+  );
   const done = rows.filter((r) => r.current_status === 'completed');
   const allDone = rows.length > 0 && done.length === rows.length;
 
@@ -220,8 +227,8 @@ export function FinalQaDetailScreen() {
         <Text style={styles.codeLarge}>{orderCode ?? 'Order'}</Text>
         <Text style={styles.meta}>
           <Text style={styles.mono}>{done.length}</Text> of{' '}
-          <Text style={styles.mono}>{rows.length}</Text> repeats through QA
-          {withQa.length > 0 ? ` · ${withQa.length} waiting on QA's final pass` : ''}
+          <Text style={styles.mono}>{rows.length}</Text> repeats passed
+          {pending.length > 0 ? ` · ${pending.length} still to check` : ''}
         </Text>
 
         <View style={styles.stitch}>
@@ -241,44 +248,54 @@ export function FinalQaDetailScreen() {
 
         {/* ---- Repeats ---- */}
         <Text style={styles.sectionTitleInline}>Repeats</Text>
-        {rows.map((r) => (
-          <View key={r.id} style={styles.repeatRow}>
-            <Text style={styles.repeatCode}>{r.repeat_code}</Text>
-            <View style={styles.repeatRight}>
-              <RepeatStatusPill status={r.current_status} />
-              {r.current_status === 'awaiting_final_qa' ? (
-                <Pressable
-                  onPress={() => {
-                    setError(null);
-                    passMutation.mutate(r.id);
-                  }}
-                  accessibilityRole="button"
-                  style={({ pressed }) => [styles.passBtn, pressed && { opacity: 0.7 }]}
-                >
-                  <Text style={styles.passBtnText}>Pass</Text>
-                </Pressable>
+        {rows.map((r) => {
+          // `awaiting_qa_final` is accepted here too: those are pieces that
+          // cleared this gate before 0087 and were left waiting on a QA pass
+          // that no longer happens. They finish here.
+          const canPass =
+            r.current_status === 'awaiting_final_qa' || r.current_status === 'awaiting_qa_final';
+          const shot = photos[r.id] ?? [];
+          return (
+            <View key={r.id} style={styles.repeatBlock}>
+              <View style={styles.repeatRow}>
+                <Text style={styles.repeatCode}>{r.repeat_code}</Text>
+                <View style={styles.repeatRight}>
+                  <RepeatStatusPill status={r.current_status} />
+                  {canPass ? (
+                    <Pressable
+                      onPress={() => {
+                        setError(null);
+                        passMutation.mutate(r.id);
+                      }}
+                      disabled={!shot[0] || passMutation.isPending}
+                      accessibilityRole="button"
+                      accessibilityState={{ disabled: !shot[0] }}
+                      style={({ pressed }) => [
+                        styles.passBtn,
+                        !shot[0] && styles.passBtnDisabled,
+                        pressed && { opacity: 0.7 },
+                      ]}
+                    >
+                      <Text style={styles.passBtnText}>Pass</Text>
+                    </Pressable>
+                  ) : null}
+                </View>
+              </View>
+
+              {canPass ? (
+                <PhotoPicker
+                  label="Finished product"
+                  hint="Required — the last record of this piece before it is billed."
+                  photos={shot}
+                  onChange={(next) => setPhotos((prev) => ({ ...prev, [r.id]: next }))}
+                  multiple={false}
+                />
               ) : null}
             </View>
-          </View>
-        ))}
+          );
+        })}
 
-        {pending.length > 0 ? (
-          <AppButton
-            title={`Pass all ${pending.length} remaining`}
-            onPress={() =>
-              confirmAction(
-                'Pass final QA',
-                `${pending.length} repeat(s) will be sent to QA for the final pass.`,
-                () => {
-                  setError(null);
-                  passAllMutation.mutate();
-                }
-              )
-            }
-            loading={passAllMutation.isPending}
-            style={{ marginTop: spacing.lg }}
-          />
-        ) : null}
+
 
         {/* ---- The whole journey (0084, Fix 7) ---- */}
         <OrderJourney orderId={orderId} />
@@ -562,6 +579,7 @@ const styles = StyleSheet.create({
   mono: { fontFamily: fontFamily.mono, color: colors.indigoDeep },
   action: { marginTop: spacing.xs, fontSize: fontSize.caption, color: colors.brass, fontWeight: fontWeight.semibold },
   stitch: { marginVertical: spacing.lg },
+  repeatBlock: { marginBottom: spacing.md },
   repeatRow: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -580,6 +598,7 @@ const styles = StyleSheet.create({
     borderRadius: radius.pill,
     backgroundColor: colors.brass,
   },
+  passBtnDisabled: { opacity: 0.45 },
   passBtnText: { color: colors.indigoDeep, fontSize: fontSize.caption, fontWeight: fontWeight.semibold },
   invoiceBlock: {
     marginTop: spacing.xxl,

@@ -13,15 +13,24 @@
  * progression never depends on colour perception alone (quality floor).
  */
 import React from 'react';
-import { View, Text, StyleSheet, ScrollView } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, Image, Pressable, Modal } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { colors, spacing, fontSize, fontWeight } from '../../constants/theme';
+import { colors, spacing, radius, fontSize, fontWeight } from '../../constants/theme';
 import type { TimelineStep } from '../../models/orderTypes';
 
 interface Props {
   steps: TimelineStep[];
   /** Vertical reads better on a phone for long sequences; horizontal for compact. */
   orientation?: 'vertical' | 'horizontal';
+  /**
+   * Signed URL per storage path, for the evidence photo on each step (0087).
+   * Resolving them is the caller's job: signed URLs expire, and this component
+   * is rendered from cached query data that outlives them.
+   *
+   * Only the vertical timeline shows photos — the horizontal form is a compact
+   * strip for list rows and headers, where a thumbnail would not fit.
+   */
+  photoUrls?: Record<string, string>;
 }
 
 const STATE_COLOR: Record<TimelineStep['state'], string> = {
@@ -36,12 +45,12 @@ const STATE_WORD: Record<TimelineStep['state'], string> = {
   ahead: 'Not started',
 };
 
-export function StageProgress({ steps, orientation = 'vertical' }: Props) {
+export function StageProgress({ steps, orientation = 'vertical', photoUrls }: Props) {
   if (!steps.length) return null;
   return orientation === 'horizontal' ? (
     <HorizontalLine steps={steps} />
   ) : (
-    <VerticalLine steps={steps} />
+    <VerticalLine steps={steps} photoUrls={photoUrls} />
   );
 }
 
@@ -67,26 +76,72 @@ function HorizontalLine({ steps }: { steps: TimelineStep[] }) {
 }
 
 /** Full vertical timeline — the status tracker screen. */
-function VerticalLine({ steps }: { steps: TimelineStep[] }) {
+function VerticalLine({
+  steps,
+  photoUrls,
+}: {
+  steps: TimelineStep[];
+  photoUrls?: Record<string, string>;
+}) {
+  // Which photo is open full-size. One at a time, and null when none — a
+  // thumbnail on a phone is too small to judge a piece of cloth by.
+  const [zoomed, setZoomed] = React.useState<string | null>(null);
+
   return (
     <View>
-      {steps.map((s, i) => (
-        <View key={s.step_key} style={styles.vRow}>
-          <View style={styles.vRail}>
-            <Dot state={s.state} />
-            {i < steps.length - 1 ? <VStitches state={s.state} /> : null}
-          </View>
+      {steps.map((s, i) => {
+        const url = s.photo_url ? photoUrls?.[s.photo_url] : undefined;
+        return (
+          <View key={s.step_key} style={styles.vRow}>
+            <View style={styles.vRail}>
+              <Dot state={s.state} />
+              {i < steps.length - 1 ? <VStitches state={s.state} /> : null}
+            </View>
 
-          <View style={styles.vBody}>
-            <Text style={styles.vLabel}>{s.label}</Text>
-            <Text style={[styles.vState, { color: STATE_COLOR[s.state] === colors.border ? colors.slate : STATE_COLOR[s.state] }]}>
-              {STATE_WORD[s.state]}
-              {s.at ? ` · ${formatWhen(s.at)}` : ''}
-            </Text>
-            {s.detail ? <Text style={styles.vDetail}>{s.detail}</Text> : null}
+            <View style={styles.vBody}>
+              <Text style={styles.vLabel}>{s.label}</Text>
+              <Text style={[styles.vState, { color: STATE_COLOR[s.state] === colors.border ? colors.slate : STATE_COLOR[s.state] }]}>
+                {STATE_WORD[s.state]}
+                {s.at ? ` · ${formatWhen(s.at)}` : ''}
+              </Text>
+              {s.detail ? <Text style={styles.vDetail}>{s.detail}</Text> : null}
+
+              {/* The evidence for this step. Rendered only when a photo both
+                  exists on the step AND has resolved to a signed URL — a broken
+                  image frame on a status tracker reads as a failure of the
+                  step, not of the link. */}
+              {url ? (
+                <Pressable
+                  onPress={() => setZoomed(url)}
+                  accessibilityRole="imagebutton"
+                  accessibilityLabel={`${s.label} photo — tap to enlarge`}
+                  style={({ pressed }) => [styles.vPhotoWrap, pressed && { opacity: 0.8 }]}
+                >
+                  <Image source={{ uri: url }} style={styles.vPhoto} resizeMode="cover" />
+                </Pressable>
+              ) : null}
+            </View>
           </View>
-        </View>
-      ))}
+        );
+      })}
+
+      <Modal
+        visible={!!zoomed}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setZoomed(null)}
+      >
+        <Pressable
+          style={styles.zoomScrim}
+          accessibilityRole="button"
+          accessibilityLabel="Close photo"
+          onPress={() => setZoomed(null)}
+        >
+          {zoomed ? (
+            <Image source={{ uri: zoomed }} style={styles.zoomImage} resizeMode="contain" />
+          ) : null}
+        </Pressable>
+      </Modal>
     </View>
   );
 }
@@ -158,6 +213,25 @@ const styles = StyleSheet.create({
   vLabel: { fontSize: fontSize.body, fontWeight: fontWeight.medium, color: colors.indigoDeep },
   vState: { marginTop: 2, fontSize: fontSize.caption, fontWeight: fontWeight.medium },
   vDetail: { marginTop: 2, fontSize: fontSize.secondary, color: colors.slate },
+  vPhotoWrap: {
+    marginTop: spacing.sm,
+    width: 120,
+    height: 90,
+    borderRadius: radius.md,
+    overflow: 'hidden',
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.bg,
+  },
+  vPhoto: { width: '100%', height: '100%' },
+  zoomScrim: {
+    flex: 1,
+    backgroundColor: 'rgba(27, 46, 45, 0.92)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: spacing.lg,
+  },
+  zoomImage: { width: '100%', height: '80%' },
 
   dot: {
     width: 18,

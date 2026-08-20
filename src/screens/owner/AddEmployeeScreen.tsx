@@ -1,10 +1,18 @@
 /**
  * Add Employee — role-first creation flow.
  *
- * Pick the role first (Worker, Manager, QA, Labour, Delivery Person, Order
- * Taker). A Worker chooses how they're paid (per stitch / per day / per month);
- * every other role is paid monthly. Submitting calls the create_employee RPC,
- * which makes the auth login + profile + compensation row in one transaction.
+ * A Worker chooses how they're paid (per stitch / per day / per month); every
+ * other role is paid monthly. Submitting calls the create_employee RPC, which
+ * makes the auth login + profile + compensation row in one transaction.
+ *
+ * THE ROLE LIST CHANGED (0086), IN THREE WAYS:
+ *   - "Order Taker" and "Delivery Person" are one option, "Order/Delivery
+ *     Person". It creates a single `order_delivery` account that satisfies
+ *     every order-taker AND delivery check in the database.
+ *   - "Manager" is gone as an option. Floor Manager and Store Manager are
+ *     picked directly, so there is no second "which kind of manager?" question
+ *     and no way to create the role-with-no-navigator that 0033 was patching.
+ *   - "Initial QA" is "QA" again.
  */
 import React, { useState } from 'react';
 import { View, Text, ScrollView, StyleSheet } from 'react-native';
@@ -23,16 +31,11 @@ import { colors, spacing, fontSize, fontWeight } from '../../constants/theme';
 
 const ROLE_OPTIONS: Option[] = [
   { value: 'worker', label: 'Worker' },
-  { value: 'manager', label: 'Manager' },
-  { value: 'qa', label: 'Initial QA' },
-  { value: 'labour', label: 'Labour' },
-  { value: 'delivery', label: 'Delivery Person' },
-  { value: 'order_taker', label: 'Order Taker' },
-];
-
-const MANAGER_TYPE_OPTIONS: Option[] = [
   { value: 'floor_manager', label: 'Floor Manager' },
   { value: 'store_manager', label: 'Store Manager' },
+  { value: 'qa', label: 'QA' },
+  { value: 'order_delivery', label: 'Order/Delivery Person' },
+  { value: 'labour', label: 'Labour' },
 ];
 
 const SALARY_OPTIONS: Option[] = [
@@ -58,7 +61,6 @@ export function AddEmployeeScreen() {
   const queryClient = useQueryClient();
 
   const [role, setRole] = useState<string | null>(null);
-  const [managerType, setManagerType] = useState<string | null>(null);
   const [displayName, setDisplayName] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -67,18 +69,13 @@ export function AddEmployeeScreen() {
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [formError, setFormError] = useState<string | null>(null);
 
-  // "Manager" is a picker step, not a real role: the account is actually
-  // created as floor_manager or store_manager so it lands on that role's
-  // real dashboard instead of the placeholder generic-manager shell.
-  const effectiveRole = role === 'manager' ? managerType : role;
-
   const create = useMutation({
     mutationFn: () =>
       createEmployee({
         email,
         password,
         displayName,
-        role: effectiveRole as string,
+        role: role as string,
         salaryType: (salaryType ?? 'per_month') as SalaryType,
         salaryAmount: Number(salaryAmount),
       }),
@@ -97,7 +94,6 @@ export function AddEmployeeScreen() {
   function validate(): boolean {
     const next: Record<string, string> = {};
     if (!role) next.role = 'Choose a role first.';
-    if (role === 'manager' && !managerType) next.managerType = 'Choose floor manager or store manager.';
     if (!displayName.trim()) next.displayName = 'Display name is required.';
     if (!/^\S+@\S+\.\S+$/.test(email.trim())) next.email = 'Enter a valid email.';
     if (password.length < 8) next.password = 'Password must be at least 8 characters.';
@@ -135,22 +131,10 @@ export function AddEmployeeScreen() {
           onChange={(v) => {
             setRole(v);
             if (v !== 'worker') setSalaryType(null);
-            if (v !== 'manager') setManagerType(null);
           }}
           required
           error={errors.role}
         />
-
-        {role === 'manager' ? (
-          <SelectField
-            label="Manager type"
-            value={managerType}
-            options={MANAGER_TYPE_OPTIONS}
-            onChange={setManagerType}
-            required
-            error={errors.managerType}
-          />
-        ) : null}
 
         <TextField
           label="Display name"

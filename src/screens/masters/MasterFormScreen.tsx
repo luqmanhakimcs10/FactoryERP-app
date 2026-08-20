@@ -23,7 +23,10 @@ import { Screen } from '../../components/ui/Screen';
 import { AppButton } from '../../components/ui/AppButton';
 import { TextField } from '../../components/forms/TextField';
 import { SelectField } from '../../components/forms/SelectField';
+import { MultiSelectField } from '../../components/forms/MultiSelectField';
+import { DateField } from '../../components/forms/DateField';
 import { StitchLine } from '../../components/ui/StitchLine';
+import { PartnerLinkPanel } from './PartnerLinkPanel';
 import { ListRow } from '../../components/lists/ListRow';
 import {
   getMaster,
@@ -114,7 +117,15 @@ export function MasterFormScreen({ entity }: { entity?: string } = {}) {
     const next: Values = {};
     for (const f of config.fields) {
       const v = (record as any)[f.key];
-      next[f.key] = v === null || v === undefined ? null : String(v);
+      if (v === null || v === undefined) {
+        next[f.key] = null;
+      } else if (Array.isArray(v)) {
+        // Postgres text[] arrives as a JS array. Form state is flat strings, so
+        // a multiselect lives as a comma-joined list and is split again on save.
+        next[f.key] = v.join(',');
+      } else {
+        next[f.key] = String(v);
+      }
     }
     setValues(next);
   }, [record, config.fields]);
@@ -148,6 +159,10 @@ export function MasterFormScreen({ entity }: { entity?: string } = {}) {
           payload[f.key] = raw === null || raw === '' ? null : Number(raw);
         } else if (f.type === 'checkbox') {
           payload[f.key] = raw === 'true';
+        } else if (f.type === 'multiselect') {
+          // NOT null when empty: the column is `not null default '{}'`, and a
+          // null would be rejected rather than read as "supplies nothing".
+          payload[f.key] = raw ? raw.split(',').filter(Boolean) : [];
         } else {
           payload[f.key] = raw === '' ? null : raw;
         }
@@ -379,6 +394,10 @@ export function MasterFormScreen({ entity }: { entity?: string } = {}) {
           </View>
         ) : null}
 
+        {isPartner ? (
+          <PartnerLinkPanel token={(record as any)?.access_token ?? null} isNew={!isEdit} />
+        ) : null}
+
         {config.fields.map((f) => (
           <FieldRenderer
             key={f.key}
@@ -475,6 +494,33 @@ function FieldRenderer({
         label={field.label}
         value={value === 'true'}
         onChange={editable ? (on) => onChange(String(on)) : () => {}}
+        error={error}
+      />
+    );
+  }
+
+  if (field.type === 'date') {
+    return (
+      <DateField
+        label={field.label}
+        value={value}
+        onChange={editable ? onChange : () => {}}
+        required={field.required}
+        error={error}
+        editable={editable}
+        placeholder={field.placeholder}
+      />
+    );
+  }
+
+  if (field.type === 'multiselect') {
+    return (
+      <MultiSelectField
+        label={field.label}
+        value={value ? value.split(',').filter(Boolean) : []}
+        options={field.options ?? []}
+        onChange={editable ? (vals) => onChange(vals.join(',')) : () => {}}
+        required={field.required}
         error={error}
       />
     );

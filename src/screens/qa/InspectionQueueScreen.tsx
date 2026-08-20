@@ -1,6 +1,11 @@
 /**
- * QA Inspection Queue — orders awaiting incoming cloth inspection, plus orders
- * that have been accepted and still need repeat coding.
+ * QA Inspection Queue — QA's single entry point into the inspection/coding flow.
+ *
+ * ONE LIST, ONE DESTINATION. It used to carry two counters (awaiting
+ * inspection / awaiting coding) and route each row to a different screen based
+ * on which of the two statuses the order was in. Both buckets are now steps
+ * inside `OrderQa`, so the split served no purpose except to make QA decide
+ * where they were going before they got there.
  *
  * Queue counts are per-factory by RLS, so a badge can never include another
  * tenant's work.
@@ -31,7 +36,7 @@ import {
   fontFamily,
 } from '../../constants/theme';
 
-/** Both buckets QA owns: inspection first, then coding. */
+/** Both steps QA owns, in one list — the flow behind them is one screen. */
 const QA_STATUSES = ['awaiting_cloth_inspection', 'awaiting_coding'];
 
 export function InspectionQueueScreen() {
@@ -43,15 +48,14 @@ export function InspectionQueueScreen() {
   });
 
   const rows = data ?? [];
-  const toInspect = rows.filter((o) => o.status === 'awaiting_cloth_inspection').length;
-  const toCode = rows.filter((o) => o.status === 'awaiting_coding').length;
 
   return (
     <Screen padded={false}>
-      <View style={styles.summary}>
-        <Counter label="Awaiting inspection" value={toInspect} />
-        <Counter label="Awaiting coding" value={toCode} />
-      </View>
+      <Text style={styles.lede}>
+        {rows.length === 0
+          ? 'Nothing waiting on QA.'
+          : `${rows.length} order${rows.length === 1 ? '' : 's'} waiting on you. Each one opens the same flow: check the cloth, then inspect every piece.`}
+      </Text>
 
       {isLoading ? (
         <ActivityIndicator color={colors.indigo} style={{ marginTop: spacing.xl }} />
@@ -69,20 +73,15 @@ export function InspectionQueueScreen() {
           ListEmptyComponent={
             <View style={styles.center}>
               <Text style={styles.emptyTitle}>Queue is clear</Text>
-              <Text style={styles.emptyBody}>
-                No orders are waiting on inspection or coding.
-              </Text>
+              <Text style={styles.emptyBody}>No orders are waiting on QA.</Text>
             </View>
           }
           renderItem={({ item }) => (
             <QueueRow
               order={item}
-              onPress={() =>
-                navigation.navigate(
-                  item.status === 'awaiting_cloth_inspection' ? 'ClothInspection' : 'OrderQa',
-                  { orderId: item.id }
-                )
-              }
+              // Always the same destination. Which step it opens on is the
+              // order's business, decided inside the screen from its status.
+              onPress={() => navigation.navigate('OrderQa', { orderId: item.id })}
             />
           )}
         />
@@ -91,17 +90,10 @@ export function InspectionQueueScreen() {
   );
 }
 
-function Counter({ label, value }: { label: string; value: number }) {
-  return (
-    <View style={styles.counter}>
-      <Text style={styles.counterValue}>{value}</Text>
-      <Text style={styles.counterLabel}>{label}</Text>
-    </View>
-  );
-}
-
 function QueueRow({ order, onPress }: { order: OrderListRow; onPress: () => void }) {
-  const action = order.status === 'awaiting_cloth_inspection' ? 'Inspect cloth' : 'Repeat QA';
+  // Names the step this order is ON, not a separate place to go — both open
+  // the same screen.
+  const action = order.status === 'awaiting_cloth_inspection' ? 'Start QA — cloth first' : 'Start QA';
   return (
     <Pressable
       onPress={onPress}
@@ -116,8 +108,8 @@ function QueueRow({ order, onPress }: { order: OrderListRow; onPress: () => void
         {order.vendor_name}
       </Text>
       <Text style={styles.meta}>
-        {order.sheet_count} sheet{order.sheet_count === 1 ? '' : 's'} ·{' '}
-        <Text style={styles.mono}>{order.repeat_total}</Text> repeats to code
+        <Text style={styles.mono}>{order.repeat_total}</Text> repeat
+        {order.repeat_total === 1 ? '' : 's'} to inspect
       </Text>
       <Text style={styles.action}>{action} →</Text>
     </Pressable>
@@ -125,26 +117,12 @@ function QueueRow({ order, onPress }: { order: OrderListRow; onPress: () => void
 }
 
 const styles = StyleSheet.create({
-  summary: {
-    flexDirection: 'row',
-    gap: spacing.md,
+  lede: {
     padding: spacing.lg,
+    fontSize: fontSize.secondary,
+    color: colors.inkMuted,
+    lineHeight: 20,
   },
-  counter: {
-    flex: 1,
-    borderWidth: 1,
-    borderColor: colors.border,
-    borderRadius: 10,
-    backgroundColor: colors.surface,
-    padding: spacing.md,
-  },
-  counterValue: {
-    fontSize: fontSize.hero,
-    fontWeight: fontWeight.semibold,
-    color: colors.indigoDeep,
-    fontFamily: fontFamily.mono,
-  },
-  counterLabel: { fontSize: fontSize.caption, color: colors.slate },
   row: {
     paddingHorizontal: spacing.lg,
     paddingVertical: spacing.md,

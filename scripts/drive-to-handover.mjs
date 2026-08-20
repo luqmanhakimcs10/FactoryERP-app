@@ -235,8 +235,14 @@ const card = (await get('floor', `job_cards?order_id=eq.${orderId}&select=id,sta
 
 const informed = await rpc('floor', 'fm_mark_vendor_informed', { p_order_id: orderId });
 if (!informed.ok) bail(`fm_mark_vendor_informed: ${informed.msg}`);
+// From 0088 "Client Approved" requests the material itself, so this call is a
+// no-op that REFUSES ("already been requested"). Tolerated rather than removed:
+// the same script has to keep working against a database where 0088 has not
+// been applied yet.
 const asked = await rpc('floor', 'fm_ask_for_material', { p_order_id: orderId });
-if (!asked.ok) bail(`fm_ask_for_material: ${asked.msg}`);
+if (!asked.ok && !/already been requested/i.test(asked.msg ?? '')) {
+  bail(`fm_ask_for_material: ${asked.msg}`);
+}
 step(`job card ${card?.id ? 'built' : 'MISSING'}, confirmed, material requested`);
 
 // ---------------------------------------------------------------------------

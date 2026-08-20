@@ -96,7 +96,7 @@ const REPEAT_STATUS_LABEL: Record<string, string> = {
   awaiting_final_qa: 'Awaiting final QA',
   awaiting_qa_final: 'With QA — final pass',
   completed: 'Completed',
-  rejected_at_qa: 'Rejected at Initial QA',
+  rejected_at_qa: 'Rejected at QA',
 };
 
 function statusPill(row: ReturnRepeatRow) {
@@ -237,7 +237,7 @@ export function ReturnsScreen() {
       {completeError ? <Text style={styles.error}>{completeError}</Text> : null}
       <Text style={styles.note}>
         {tab === 'active'
-          ? 'Pieces rejected at Initial QA, and repeats out at a finishing stage or back waiting on QA. Once a piece has physically gone back to the vendor, press "Complete return".'
+          ? 'Pieces rejected at QA, and repeats out at a finishing stage or back waiting on QA. Once a piece has physically gone back to the vendor, press "Complete return".'
           : tab === 'completed'
           ? 'Repeats that returned and passed collection QA, or that you confirmed had gone back to the vendor.'
           : 'Final delivery is recorded per order, so this tab lists orders with their repeat counts.'}
@@ -350,7 +350,7 @@ export function ReturnsScreen() {
               <Text style={styles.meta}>
                 {item.bucket === 'active'
                   ? item.kind === 'qa_rejection'
-                    ? `Rejected at Initial QA ${when(item.occurred_at)}`
+                    ? `Rejected at QA ${when(item.occurred_at)}`
                     : `Handed off ${when(item.handed_off_at)}${
                         item.returned_at ? ` · returned ${when(item.returned_at)}` : ''
                       }`

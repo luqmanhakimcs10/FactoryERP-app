@@ -39,6 +39,8 @@ import { Ionicons } from '@expo/vector-icons';
 import { Screen } from '../../components/ui/Screen';
 import { DashboardHeader } from '../../components/ui/DashboardHeader';
 import { SegmentedTabs } from '../../components/ui/SegmentedTabs';
+import { StatCard, StatGrid } from '../../components/ui/StatGrid';
+import { statCount } from '../../utils/statValue';
 import { TaskBanners } from '../../components/ui/TaskBanners';
 import { AppButton } from '../../components/ui/AppButton';
 import { StatusPill, RepeatStatusPill } from '../../components/ui/StatusPill';
@@ -163,6 +165,11 @@ export function DeliveryOrdersScreen({ navigation, route }: any) {
     pickup: all.filter((r) => r.tab === 'pickup').length,
   };
   const rows = all.filter((r) => r.tab === tab);
+  /*
+   * The metrics grid IS `counts` — the same three numbers the tab labels carry.
+   * Deliberately not a second read: two sources for "how many am I collecting"
+   * is two numbers that can disagree on the same screen.
+   */
   const breached = rows.filter((r) => r.sla_breached).length;
   const showFinal = tab === 'delivery' && (finalDeliveries?.length ?? 0) > 0;
 
@@ -174,6 +181,32 @@ export function DeliveryOrdersScreen({ navigation, route }: any) {
         searchPlaceholder="Repeat, order, vendor, stage…"
         navigation={navigation}
       />
+
+      <View style={styles.metrics}>
+        <StatGrid>
+          <StatCard
+            label="In Collection"
+            value={statCount(isLoading ? undefined : counts.collection)}
+            icon="download-outline"
+            tone={counts.collection ? 'attention' : 'neutral'}
+            onPress={() => setTab('collection')}
+          />
+          <StatCard
+            label="In Delivery"
+            value={statCount(isLoading ? undefined : counts.delivery)}
+            icon="bicycle-outline"
+            tone={counts.delivery ? 'attention' : 'neutral'}
+            onPress={() => setTab('delivery')}
+          />
+          <StatCard
+            label="In Pickup"
+            value={statCount(isLoading ? undefined : counts.pickup)}
+            icon="cube-outline"
+            tone={counts.pickup ? 'attention' : 'neutral'}
+            onPress={() => setTab('pickup')}
+          />
+        </StatGrid>
+      </View>
 
       <View style={styles.tabsWrap}>
         <SegmentedTabs
@@ -453,6 +486,7 @@ function DeliveryCard({
 }
 
 const styles = StyleSheet.create({
+  metrics: { paddingHorizontal: spacing.lg, paddingTop: spacing.md },
   tabsWrap: { paddingTop: spacing.md },
   head: { paddingHorizontal: spacing.lg, paddingTop: spacing.md },
   sub: { fontSize: fontSize.secondary, color: colors.slate, lineHeight: 20 },

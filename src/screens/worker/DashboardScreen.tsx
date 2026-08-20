@@ -16,6 +16,8 @@ import { useNavigation } from '@react-navigation/native';
 import { Screen } from '../../components/ui/Screen';
 import { DashboardHeader } from '../../components/ui/DashboardHeader';
 import { TaskBanners } from '../../components/ui/TaskBanners';
+import { StatCard, StatGrid } from '../../components/ui/StatGrid';
+import { statCount, statMoney, statBigCount } from '../../utils/statValue';
 import { StitchLine } from '../../components/ui/StitchLine';
 import { StatusPill } from '../../components/ui/StatusPill';
 import { ListRow } from '../../components/lists/ListRow';
@@ -25,6 +27,7 @@ import {
   getWorkerLatestLedger,
   getWorkerCurrentShift,
   getWorkerActiveLoan,
+  getWorkerLeaveHistory,
 } from '../../api/endpoints/dashboards';
 import { describeDbError } from '../../utils/errors';
 import { colors, spacing, radius, fontSize, fontWeight, fontFamily } from '../../constants/theme';
@@ -45,6 +48,48 @@ export function WorkerDashboardScreen() {
     queryKey: ['worker', 'activeLoan'],
     queryFn: getWorkerActiveLoan,
   });
+  /**
+   * LEAVE. There is no leave BALANCE anywhere in this system — no entitlement is
+   * configured per employee, so nothing can be counted down from. The closest
+   * live figure is how many days have been approved, which is what this shows
+   * and what the label says. Flagged rather than invented.
+   */
+  const leave = useQuery({
+    queryKey: ['worker', 'leaveHistory'],
+    queryFn: getWorkerLeaveHistory,
+  });
+
+  /**
+   * A ledger figure, or the right kind of blank.
+   *
+   * `getWorkerLatestLedger` returns null both while it is loading and when the
+   * worker simply has no row for this period. Those are different facts, and a
+   * card that shows an em-dash for the second one is telling a worker who has
+   * not been paid yet that the app does not know.
+   */
+  function ledgerFigure(
+    v: number | null | undefined,
+    fmt: (n: number | null | undefined) => string
+  ): string {
+    if (ledger.isLoading || ledger.isError) return '—';
+    return fmt(v ?? 0);
+  }
+
+  /**
+   * Whole days across every APPROVED leave record, inclusive of both ends.
+   * Pending and rejected requests are not leave taken.
+   */
+  const leaveDays =
+    leave.data === undefined
+      ? undefined
+      : leave.data
+          .filter((l) => l.status === 'approved')
+          .reduce((n, l) => {
+            const from = new Date(l.start_date).getTime();
+            const to = new Date(l.end_date).getTime();
+            if (Number.isNaN(from) || Number.isNaN(to) || to < from) return n;
+            return n + Math.round((to - from) / 86400000) + 1;
+          }, 0);
 
   return (
     <Screen padded={false}>
@@ -70,6 +115,36 @@ export function WorkerDashboardScreen() {
         </View>
         <View style={styles.stitch}>
           <StitchLine />
+        </View>
+
+        <View style={styles.metrics}>
+          <StatGrid>
+            {/* `ledgerFigure` distinguishes the two things an absent number can
+                mean. Still loading, or the read failed -> em-dash. Loaded, with
+                no ledger row for this period -> the worker has earned nothing
+                yet, and 0 is the true answer rather than a shrug. */}
+            <StatCard
+              label="Stitches this period"
+              value={ledgerFigure(ledger.data?.stitch_count, statBigCount)}
+              icon="git-commit-outline"
+            />
+            <StatCard
+              label="Earnings this period"
+              value={ledgerFigure(ledger.data?.net, statMoney)}
+              icon="cash-outline"
+            />
+            <StatCard
+              label="Bonus earned"
+              value={ledgerFigure(ledger.data?.bonus, statMoney)}
+              icon="trophy-outline"
+            />
+            <StatCard
+              label="Leave days approved"
+              value={statCount(leaveDays)}
+              icon="calendar-outline"
+              onPress={() => navigation.navigate('LeaveRequest')}
+            />
+          </StatGrid>
         </View>
 
         <View style={styles.section}>
@@ -266,6 +341,7 @@ function CardError({ message }: { message: string }) {
 }
 
 const styles = StyleSheet.create({
+  metrics: { paddingHorizontal: spacing.xl, marginBottom: spacing.lg },
   content: { paddingBottom: spacing.xl },
   header: { paddingHorizontal: spacing.xl, paddingTop: spacing.xl },
   title: { fontSize: fontSize.title, fontWeight: fontWeight.semibold, color: colors.indigoDeep },

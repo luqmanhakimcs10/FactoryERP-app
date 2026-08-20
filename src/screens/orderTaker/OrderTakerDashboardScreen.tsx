@@ -17,15 +17,36 @@ import { Screen } from '../../components/ui/Screen';
 import { DashboardHeader } from '../../components/ui/DashboardHeader';
 import { TaskBanners } from '../../components/ui/TaskBanners';
 import { MasterCard, CardGrid, type MasterCardProps } from '../../components/ui/MasterCard';
+import { StatCard, StatGrid } from '../../components/ui/StatGrid';
+import { statCount } from '../../utils/statValue';
 import { matchesSearch } from '../../utils/search';
-import { countOrders, listReturnRepeats } from '../../api/endpoints/orders';
+import { countOrders, listReturnRepeats, listOrders } from '../../api/endpoints/orders';
+import { ACTIVE_ORDER_STATUSES } from '../../models/orderTypes';
+import { useAuth } from '../../auth/AuthContext';
+import { ROLES } from '../../constants/roles';
 import { colors, spacing, radius, fontSize, fontWeight, fontFamily } from '../../constants/theme';
 
 export function OrderTakerDashboardScreen() {
   const navigation = useNavigation<any>();
+  const { role } = useAuth();
   const [search, setSearch] = useState('');
 
+  // The merged Order/Delivery Person lands here too. Their delivery work is a
+  // third card rather than a second dashboard: it is the same launcher, and
+  // the list it opens is the delivery person's existing single-tab Orders list.
+  const isOrderDelivery = role === ROLES.ORDER_DELIVERY;
+
   const orders = useQuery({ queryKey: ['orderCount'], queryFn: countOrders });
+  // Both reads are already scoped to this order taker's own orders by
+  // `ot_return_repeats` and by RLS, so the numbers are theirs, not the floor's.
+  const activeOrders = useQuery({
+    queryKey: ['orders', 'otActive'],
+    queryFn: () => listOrders(ACTIVE_ORDER_STATUSES),
+  });
+  const awaitingInspection = useQuery({
+    queryKey: ['orders', 'otAwaitingInspection'],
+    queryFn: () => listOrders(['awaiting_cloth_inspection']),
+  });
   const returns = useQuery({ queryKey: ['returnRepeats'], queryFn: listReturnRepeats });
 
   const activeCount = returns.data
@@ -51,11 +72,24 @@ export function OrderTakerDashboardScreen() {
       count: activeCount,
       onPress: () => navigation.navigate('Returns'),
     },
+    ...(isOrderDelivery
+      ? [
+          {
+            key: 'deliveries',
+            label: 'Deliveries',
+            subtitle: 'Collect, deliver and pick up pieces',
+            icon: 'bicycle-outline',
+            accent: colors.primary,
+            count: null,
+            onPress: () => navigation.navigate('DeliveryOrders'),
+          } as MasterCardProps & { key: string },
+        ]
+      : []),
   ];
 
   const visible = useMemo(
     () => cards.filter((c) => matchesSearch(search, c.label, c.subtitle)),
-    [search, orders.data, activeCount]
+    [search, orders.data, activeCount, isOrderDelivery]
   );
 
   return (
@@ -78,6 +112,29 @@ export function OrderTakerDashboardScreen() {
 
         <TaskBanners />
 
+        <View style={styles.metrics}>
+          <StatGrid>
+            <StatCard
+              label="Active orders"
+              value={statCount(activeOrders.data?.length)}
+              icon="document-text-outline"
+              onPress={() => navigation.navigate('MyOrders')}
+            />
+            <StatCard
+              label="Awaiting cloth inspection"
+              value={statCount(awaitingInspection.data?.length)}
+              icon="shield-checkmark-outline"
+            />
+            <StatCard
+              label="Active returns"
+              value={statCount(activeCount ?? undefined)}
+              icon="swap-horizontal-outline"
+              tone={activeCount ? 'attention' : 'neutral'}
+              onPress={() => navigation.navigate('Returns')}
+            />
+          </StatGrid>
+        </View>
+
         <CardGrid>
           {visible.map(({ key, ...card }) => (
             <MasterCard key={key} {...card} />
@@ -96,6 +153,7 @@ export function OrderTakerDashboardScreen() {
 }
 
 const styles = StyleSheet.create({
+  metrics: { marginBottom: spacing.lg },
   container: { padding: spacing.lg, paddingTop: spacing.xl, gap: spacing.lg },
   banner: { marginTop: spacing.xs },
   empty: {

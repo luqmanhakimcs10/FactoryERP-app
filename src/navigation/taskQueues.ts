@@ -32,7 +32,6 @@ export const QUEUE_SCREEN_TITLE: Record<string, string> = {
   sm_audit_today: 'Daily audit',
   qa_inspection: 'Need inspection',
   qa_stage: 'Need stage QA',
-  qa_final: 'Need a final pass',
   dp_collect: 'Ready to collect',
   dp_send: 'Ready to send out',
   dp_pickup: 'Finished at the partner',
@@ -43,9 +42,7 @@ export const QUEUE_SCREEN_TITLE: Record<string, string> = {
   acct_receivables: 'Unpaid invoices',
   acct_payables: 'Bills to pay',
   owner_approvals: 'Approvals',
-  po_draft: 'Purchase orders to raise',
-  po_bill: 'Need a supplier bill',
-  po_handover: 'To hand over',
+  sm_po_procure: 'Purchase orders to procure',
 };
 
 /**
@@ -122,15 +119,15 @@ export function routeForItem(queueKey: string, item: QueueItem): QueueRoute | nu
 
     // ---- QA ----
     case 'qa_inspection':
-      return item.status === 'awaiting_cloth_inspection'
-        ? { screen: 'ClothInspection', params: { orderId: item.order_id } }
-        : { screen: 'OrderQa', params: { orderId: item.order_id } };
+      // One destination whatever step the order is on: cloth inspection and
+      // repeat coding are steps INSIDE OrderQa now, not separate screens.
+      return { screen: 'OrderQa', params: { orderId: item.order_id } };
 
     case 'qa_stage':
       return { screen: 'StageTracking', params: { orderId: item.order_id } };
 
-    case 'qa_final':
-      return { screen: 'FinalPassQueue' };
+    // `qa_final` was here. Final QA is the Floor Manager's step now (0087), and
+    // the queue key no longer exists — `fm_final_qa` covers those pieces.
 
     // ---- Delivery ----
     // Every leg is actioned inline on the row itself, in whichever of the three
@@ -162,12 +159,11 @@ export function routeForItem(queueKey: string, item: QueueItem): QueueRoute | nu
     case 'owner_approvals':
       return { screen: 'ApprovalDetail', params: { kind: 'expense', id: item.secondary_id } };
 
-    // ---- Procurement ----
-    // All three open the same PO screen; which button is waiting there is what
-    // differs, and the PO's own status already decides that.
-    case 'po_draft':
-    case 'po_bill':
-    case 'po_handover':
+    // ---- Purchase orders ----
+    // `po_draft` / `po_bill` / `po_handover` were here — procurement's three
+    // steps. Procurement is read-only from 0089 and the store manager owns the
+    // one remaining transition, which is on this same screen.
+    case 'sm_po_procure':
       return { screen: 'PoDetail', params: { poId: item.secondary_id } };
 
     default:

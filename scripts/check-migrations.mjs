@@ -165,7 +165,14 @@ const MIGRATIONS = [
       () => col('vendors', 'rate_per_repeat'),
       () => col('suppliers', 'payment_day'),
       () => col('machines', 'machine_type'),
-      () => col('finishing_partners', 'is_extended_partner'),
+      // `finishing_partners.is_extended_partner` was the fourth probe and is
+      // GONE — 0086 dropped the column with the checkbox that fed it. Probing
+      // for it reported 0030 as "partially applied" on a database where both
+      // migrations are correctly in place, and the advice that came with that
+      // ("re-run the whole file") would have RE-ADDED the dropped column.
+      //
+      // Same rule as 0084's four predecessors: once a later migration removes
+      // something, it stops being a fingerprint for the one that added it.
       () => col('employee_compensation', 'salary_type'),
       () => rpc('master_client_stats'),
     ],
@@ -464,6 +471,61 @@ const MIGRATIONS = [
     file: '0083_fix_stitches_chain',
     probes: [() => rpc('owner_approvals_queue')],
     note: "every function it touches keeps its existing signature, so nothing on the REST surface distinguishes the fixed versions. `npm run verify:needles` sections 6-8 are what prove them: generated lines non-zero, sm_issue_materials refusing in the DB, and a PO appearing in owner_approvals_queue with kind='purchase_order'.",
+  },
+  {
+    file: '0085_super_admin_restructure',
+    probes: [
+      () => col('factory_invoices', 'invoice_code'),
+      () => rpc('sa_billing_summary'),
+      () => rpc('sa_invoice_list', { p_status: null, p_factory_id: NIL }),
+    ],
+    note: "the WITHDRAWAL half leaves no positive fingerprint: sa_factory_inventory and sa_last_audit are dropped, and their absence is what proves it. `npm run verify:superadmin` asserts no inventory appears anywhere in Super Admin's screens.",
+  },
+  {
+    file: '0086_masters_partner_link_and_roles',
+    probes: [
+      () => col('vendors', 'billing_date'),
+      () => col('suppliers', 'inventory_types'),
+      () => col('finishing_partners', 'access_token'),
+      () => rpc('effective_roles'),
+      () => rpc('partner_portal_info', { p_token: 'probe' }),
+    ],
+    note: "the banner functions are recreated at their existing signatures, so no probe tells the role-set-aware versions apart. An `order_delivery` login getting BOTH the order taker's and the delivery person's banners is what proves them.",
+  },
+  {
+    file: '0087_timeline_photos_and_qa_simplification',
+    probes: [
+      () => rpc('fm_final_qa_queue'),
+      () => rpc('fm_final_qa_pass', { p_repeat_id: NIL, p_photo_url: '', p_note: null }),
+      () => rpc('order_timeline', { p_order_id: NIL }),
+    ],
+    note: "qa_final_pass and qa_final_queue are DROPPED by this file; their absence is half the change. `npm run verify:qaflow` asserts QA's dashboard carries no Final QA anywhere.",
+  },
+  {
+    file: '0088_fm_order_people_and_auto_material',
+    probes: [() => rpc('fm_order_people', { p_order_id: NIL })],
+    note: "fm_mark_vendor_informed keeps its signature — the material request folded into it is body-only. It is visible as behaviour: fm_ask_for_material refuses with \"already been requested\" once this is live.",
+  },
+  {
+    file: '0089_store_manager_owns_pos',
+    probes: [
+      () => col('purchase_orders', 'procured_at'),
+      () => rpc('sm_mark_po_procured', { p_po_id: NIL, p_note: null }),
+      () => rpc('proc_po_list', { p_bucket: 'pending' }),
+    ],
+    note: "po_execute, po_upload_bill, po_owner_approve and po_handover_to_store are DROPPED, and the PO branch leaves owner_approvals_queue. `npm run verify:fmpo` asserts both at the RPC level.",
+  },
+  {
+    file: '0090_granular_status_board',
+    probes: [
+      () => rpc('repeat_status_key', { p_status: 'in_progress', p_stage_index: 1 }),
+      () => rpc('fm_order_status_board', { p_order_id: NIL }),
+      () => rpc('fm_repeat_status_board', { p_order_id: NIL }),
+    ],
+  },
+  {
+    file: '0091_partner_portal_stats',
+    probes: [() => rpc('partner_portal_stats', { p_token: 'probe', p_period: null })],
   },
   {
     file: '0073_fix_grn_queue_join',
