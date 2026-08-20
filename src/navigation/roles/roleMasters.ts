@@ -20,6 +20,9 @@ export const ROLE_MASTERS: Record<Role, MasterKey[]> = {
   [ROLES.FLOOR_MANAGER]: ['machines', 'vendors'],
   [ROLES.STORE_MANAGER]: ['suppliers'],
   [ROLES.ORDER_TAKER]: ['vendors'],
+  // The merged role needs both halves' masters: clients to raise orders
+  // against, finishing partners to route work to.
+  [ROLES.ORDER_DELIVERY]: ['vendors', 'finishing_partners'],
   [ROLES.QA]: [],
   [ROLES.PROCUREMENT]: ['suppliers'],
   [ROLES.DELIVERY]: ['finishing_partners'],

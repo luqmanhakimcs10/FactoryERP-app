@@ -38,6 +38,7 @@ import { useNavigation } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
 import { Screen } from '../../components/ui/Screen';
 import { AppButton } from '../../components/ui/AppButton';
+import { TextField } from '../../components/forms/TextField';
 import { listMasters } from '../../api/endpoints/masters';
 import { createOrder, submitOrder, updateOrderPhotos } from '../../api/endpoints/orders';
 import { uploadOrderPhoto } from '../../api/endpoints/storage';
@@ -67,7 +68,20 @@ const PALETTE = [
   { name: 'Orange', code: 'ORG-11', hex: '#D2691E' },
   { name: 'Silver', code: 'SLV-12', hex: '#A9A9A9' },
 ];
-type Swatch = (typeof PALETTE)[number];
+/**
+ * A colour on an order line. Either one of the twelve presets above, or one the
+ * order taker typed in — the preset list is a convenience, not the vocabulary,
+ * and a vendor who supplies a colour that is not on it used to be unorderable.
+ *
+ * `custom` distinguishes the two so the review screen can say which is which;
+ * the shape is otherwise identical, so nothing downstream has to branch.
+ */
+interface Swatch {
+  name: string;
+  code: string;
+  hex: string;
+  custom?: boolean;
+}
 
 interface ColorEntry {
   swatch: Swatch | null;
@@ -91,6 +105,9 @@ export function NewOrderScreen() {
   ]);
   const [designUri, setDesignUri] = useState<string | null>(null);
   const [pickerFor, setPickerFor] = useState<number | null>(null);
+  // The "Other" panel inside the picker. Non-null means it is open.
+  const [customName, setCustomName] = useState<string | null>(null);
+  const [customCode, setCustomCode] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [progress, setProgress] = useState<string | null>(null);
 
@@ -108,6 +125,13 @@ export function NewOrderScreen() {
       while (out.length < next) out.push({ swatch: null, sheets: 1, repeats: 1, photoUri: null });
       return out;
     });
+  }
+
+  /** Close the picker and discard any half-typed custom colour with it. */
+  function closePicker() {
+    setPickerFor(null);
+    setCustomName(null);
+    setCustomCode('');
   }
 
   function patch(i: number, p: Partial<ColorEntry>) {
@@ -403,7 +427,8 @@ export function NewOrderScreen() {
                 <View style={{ flex: 1 }}>
                   <Text style={styles.reviewName}>{e.swatch?.name ?? 'No colour'}</Text>
                   <Text style={styles.reviewMeta}>
-                    {e.sheets} sheet{e.sheets === 1 ? '' : 's'} · {e.repeats} repeats each
+                    {e.sheets * e.repeats} repeat{e.sheets * e.repeats === 1 ? '' : 's'}
+                    {e.swatch?.custom ? ` · custom colour ${e.swatch.code}` : ''}
                   </Text>
                 </View>
               </View>
@@ -421,8 +446,11 @@ export function NewOrderScreen() {
               )}
             </View>
 
+            {/* Repeats only. `sheets` is still the row shape sent to
+                create_order — it is just not a quantity the order taker ordered
+                or can act on, and showing both invited the confusion this
+                summary is fixing. */}
             <View style={styles.totals}>
-              <TotalRow label="Total sheets" value={totals.sheets} />
               <TotalRow label="Total repeats" value={totals.repeats} />
             </View>
 
@@ -469,27 +497,103 @@ export function NewOrderScreen() {
           flips to false, so the picker stayed on screen after a selection. */}
       {pickerFor !== null ? (
       <Modal visible transparent animationType="fade">
-        <Pressable style={styles.modalBackdrop} onPress={() => setPickerFor(null)}>
+        <Pressable style={styles.modalBackdrop} onPress={closePicker}>
           <Pressable style={styles.modalCard} onPress={() => {}}>
-            <Text style={styles.modalTitle}>Pick a colour</Text>
-            <View style={styles.paletteGrid}>
-              {PALETTE.map((c) => (
-                <Pressable
-                  key={c.code}
-                  onPress={() => {
-                    if (pickerFor !== null) patch(pickerFor, { swatch: c });
-                    setPickerFor(null);
-                  }}
-                  accessibilityRole="button"
-                  accessibilityLabel={c.name}
-                  style={({ pressed }) => [styles.paletteCell, pressed && styles.pressed]}
-                >
-                  <View style={[styles.paletteSwatch, { backgroundColor: c.hex }]} />
-                  <Text style={styles.paletteName}>{c.name}</Text>
-                </Pressable>
-              ))}
-            </View>
-            <AppButton title="Cancel" variant="secondary" onPress={() => setPickerFor(null)} />
+            <Text style={styles.modalTitle}>
+              {customName === null ? 'Pick a colour' : 'Other colour'}
+            </Text>
+
+            {customName === null ? (
+              <>
+                <View style={styles.paletteGrid}>
+                  {PALETTE.map((c) => (
+                    <Pressable
+                      key={c.code}
+                      onPress={() => {
+                        if (pickerFor !== null) patch(pickerFor, { swatch: c });
+                        closePicker();
+                      }}
+                      accessibilityRole="button"
+                      accessibilityLabel={c.name}
+                      style={({ pressed }) => [styles.paletteCell, pressed && styles.pressed]}
+                    >
+                      <View style={[styles.paletteSwatch, { backgroundColor: c.hex }]} />
+                      <Text style={styles.paletteName}>{c.name}</Text>
+                    </Pressable>
+                  ))}
+
+                  {/* The twelve presets are a shortcut, not the vocabulary. A
+                      vendor's own shade goes in here rather than being forced
+                      onto the nearest preset — which is what made the thread
+                      colour on the job card wrong for anything unusual. */}
+                  <Pressable
+                    onPress={() => {
+                      setCustomName('');
+                      setCustomCode('');
+                    }}
+                    accessibilityRole="button"
+                    accessibilityLabel="Other colour — type it in"
+                    style={({ pressed }) => [styles.paletteCell, pressed && styles.pressed]}
+                  >
+                    <View style={[styles.paletteSwatch, styles.paletteOther]}>
+                      <Ionicons name="add" size={22} color={colors.indigo} />
+                    </View>
+                    <Text style={styles.paletteName}>Other</Text>
+                  </Pressable>
+                </View>
+                <AppButton title="Cancel" variant="secondary" onPress={closePicker} />
+              </>
+            ) : (
+              <>
+                <TextField
+                  label="Colour name"
+                  value={customName}
+                  onChangeText={setCustomName}
+                  placeholder="e.g. Peacock Blue"
+                  required
+                />
+                <TextField
+                  label="Colour code"
+                  value={customCode}
+                  onChangeText={setCustomCode}
+                  placeholder="e.g. PCK-21"
+                  mono
+                  required
+                />
+                <Text style={styles.hint}>
+                  The code is what appears on the job card and the thread check, so use the one
+                  the supplier and the floor already say out loud.
+                </Text>
+
+                <View style={styles.navRow}>
+                  <AppButton
+                    title="Back"
+                    variant="secondary"
+                    onPress={() => setCustomName(null)}
+                    style={{ flex: 1 }}
+                  />
+                  <AppButton
+                    title="Use this colour"
+                    onPress={() => {
+                      const name = customName.trim();
+                      const code = customCode.trim().toUpperCase();
+                      if (!name || !code) return;
+                      if (pickerFor !== null) {
+                        patch(pickerFor, {
+                          // No hex to show for a typed colour, so the swatch
+                          // renders as a neutral chip. Inventing one would put a
+                          // colour on screen that nobody chose.
+                          swatch: { name, code, hex: colors.border, custom: true },
+                        });
+                      }
+                      closePicker();
+                    }}
+                    disabled={!customName.trim() || !customCode.trim()}
+                    style={{ flex: 1 }}
+                  />
+                </View>
+              </>
+            )}
           </Pressable>
         </Pressable>
       </Modal>
@@ -771,5 +875,11 @@ const styles = StyleSheet.create({
   paletteGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.md, marginBottom: spacing.lg },
   paletteCell: { alignItems: 'center', width: 72 },
   paletteSwatch: { width: 44, height: 44, borderRadius: 22, borderWidth: 1, borderColor: colors.border },
+  paletteOther: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: colors.surface,
+    borderStyle: 'dashed',
+  },
   paletteName: { marginTop: 4, fontSize: fontSize.caption, color: colors.slate },
 });

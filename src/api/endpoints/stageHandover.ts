@@ -201,31 +201,16 @@ export async function handBackToFloor(repeatId: string) {
 }
 
 // ---------------------------------------------------------------------------
-// QA — the second of the two final gates
+// Final QA
+//
+// `listQaFinalQueue` and `qaFinalPass` were here — the second of what used to
+// be two final gates. Final QA is the Floor Manager's step now and QA has no
+// part in it (0087), so both RPCs were dropped rather than left callable: a
+// SECURITY DEFINER function that completes a repeat is not something to leave
+// on the REST surface after deciding the role that calls it should not do this.
+//
+// `QaFinalRow` below is kept — the Floor Manager's queue has the same shape.
 // ---------------------------------------------------------------------------
-
-export async function listQaFinalQueue(): Promise<QaFinalRow[]> {
-  const { data, error } = await supabase.rpc('qa_final_queue');
-  if (error) throw error;
-  return (data ?? []) as QaFinalRow[];
-}
-
-/**
- * The pass that actually completes a repeat. QA only.
- *
- * The photo is required by the database, not just here: this is the last look
- * anyone takes at the piece before it is billed and delivered, so it is the
- * worst place in the app to have no record of what was approved.
- */
-export async function qaFinalPass(repeatId: string, photoUrl: string, note?: string | null) {
-  const { data, error } = await supabase.rpc('qa_final_pass', {
-    p_repeat_id: repeatId,
-    p_photo_url: photoUrl,
-    p_note: note ?? null,
-  });
-  if (error) throw error;
-  return data;
-}
 
 // ---------------------------------------------------------------------------
 // Machine assignment (0084)
@@ -403,19 +388,12 @@ export async function adoptStrandedRepeats(orderId: string) {
   return data as { order_id: string; repeats_adopted: number };
 }
 
-/**
- * Close a rejected piece's slot with no repeat behind it — for when the vendor
- * is never going to send it back. The damage record is left intact: this is an
- * admission the piece is gone, not a retraction of who lost it.
- */
-export async function writeOffPiece(damageId: string, note?: string | null) {
-  const { data, error } = await supabase.rpc('qa_write_off_piece', {
-    p_damage_id: damageId,
-    p_note: note ?? null,
-  });
-  if (error) throw error;
-  return data;
-}
+// `writeOffPiece` was here. The "Write off" control is gone from QA's reject
+// flow (0087), so it had no caller left. `qa_write_off_piece` is deliberately
+// STILL IN THE DATABASE: it is the only thing that can close a rejected piece
+// the vendor never sends back, and dropping it would destroy that capability
+// along with the button. Re-add this wrapper if the escape is given to another
+// role.
 
 /**
  * Cancel an order with nothing left to produce. Refused once any piece has

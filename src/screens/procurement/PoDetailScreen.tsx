@@ -1,13 +1,16 @@
 /**
- * PO Detail + execution.
+ * PO detail — three statuses, two owners.
  *
- * Walks: execute → upload supplier bill → (owner approves, Phase 7 UI) →
- * (accountant pays, Phase 7 UI) → handover to store, which creates the GRN.
+ *   Creation ──▶ Procured ──▶ Paid ──▶ (Received)
+ *   store manager       accountant      store manager
  *
- * The two middle steps render as READ-ONLY wait states here on purpose — the
- * approve/reject and payment actions belong to the Owner's Approvals Inbox and
- * the Accountant's Ledgers Home, both Phase 7. The transitions exist as RPCs so
- * the flow is complete and testable; this screen just doesn't offer them.
+ * The owner-approval step is gone (0089), not hidden: `po_owner_approve` was
+ * dropped, and so were `po_execute`, `po_upload_bill` and `po_handover_to_store`.
+ * This screen therefore offers exactly ONE transition — "Procured", to the store
+ * manager — and shows everything else as state.
+ *
+ * Procurement reaches the same screen with no transition at all. Their verbs are
+ * view, save and download, so the export button is what they get.
  */
 import React, { useState } from 'react';
 import {
@@ -16,29 +19,25 @@ import {
   ScrollView,
   StyleSheet,
   ActivityIndicator,
-  Platform,
   Image,
 } from 'react-native';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { useNavigation, useRoute } from '@react-navigation/native';
+import { useRoute } from '@react-navigation/native';
+import { Ionicons } from '@expo/vector-icons';
 import { Screen } from '../../components/ui/Screen';
 import { ActionBanner } from '../../components/ui/ActionBanner';
 import { AppButton } from '../../components/ui/AppButton';
-import { TextField } from '../../components/forms/TextField';
-import { PhotoPicker, type LocalPhoto } from '../../components/camera/PhotoPicker';
+import { ConfirmDialog } from '../../components/ui/ConfirmDialog';
 import { StitchLine } from '../../components/ui/StitchLine';
 import { StatusPill } from '../../components/ui/StatusPill';
-import { PO_STATUS_COLOR } from './PoQueueScreen';
-import {
-  getPurchaseOrder,
-  executePo,
-  uploadPoBill,
-  handoverPoToStore,
-} from '../../api/endpoints/inventory';
-import { uploadOrderPhoto, getPhotoUrl } from '../../api/endpoints/storage';
+import { poStatusColor } from './PoQueueScreen';
+import { getPurchaseOrder, markPoProcured } from '../../api/endpoints/inventory';
+import { getPhotoUrl } from '../../api/endpoints/storage';
 import { useAuth } from '../../auth/AuthContext';
 import { describeDbError } from '../../utils/errors';
-import { PO_STATUS_LABEL } from '../../models/inventoryTypes';
+import { sharePoPdf } from '../../utils/poExport';
+import { ROLES } from '../../constants/roles';
+import { PO_STATUS_LABEL, PO_FLOW, poFlowStep } from '../../models/inventoryTypes';
 import {
   colors,
   spacing,
@@ -50,14 +49,13 @@ import {
 
 export function PoDetailScreen() {
   const route = useRoute<any>();
-  const navigation = useNavigation<any>();
   const queryClient = useQueryClient();
-  const { profile } = useAuth();
+  const { role } = useAuth();
   const poId: string = route.params?.poId;
 
-  const [bill, setBill] = useState<LocalPhoto[]>([]);
-  const [amount, setAmount] = useState('');
   const [error, setError] = useState<string | null>(null);
+  const [confirmProcured, setConfirmProcured] = useState(false);
+  const [exporting, setExporting] = useState(false);
 
   const { data: po, isLoading } = useQuery({
     queryKey: ['purchaseOrder', poId],
@@ -69,73 +67,138 @@ export function PoDetailScreen() {
     enabled: !!po?.bill_url,
   });
 
-  function invalidate() {
-    queryClient.invalidateQueries({ queryKey: ['purchaseOrder', poId] });
-    queryClient.invalidateQueries({ queryKey: ['purchaseOrders'] });
-    queryClient.invalidateQueries({ queryKey: ['grns'] });
-  }
-
-  const executeMutation = useMutation({
-    mutationFn: () => executePo(poId),
-    onSuccess: invalidate,
-    onError: (e) => setError(describeDbError(e, 'Purchase order')),
-  });
-
-  const billMutation = useMutation({
-    mutationFn: async () => {
-      if (!bill[0]) throw new Error('Attach the supplier bill first.');
-      if (!profile?.factory_id) throw new Error('Your profile has no factory.');
-      const path = await uploadOrderPhoto(profile.factory_id, `po-${poId}`, bill[0].uri, 'bill');
-      const amt = amount.trim() ? Number(amount) : null;
-      return uploadPoBill(poId, path, Number.isFinite(amt as number) ? amt : null);
-    },
+  const procured = useMutation({
+    mutationFn: () => markPoProcured(poId),
     onSuccess: () => {
-      setBill([]);
-      invalidate();
-    },
-    onError: (e) => setError(describeDbError(e, 'Supplier bill')),
-  });
-
-  const handoverMutation = useMutation({
-    mutationFn: () => handoverPoToStore(poId),
-    onSuccess: (grn) => {
-      invalidate();
+      for (const k of ['purchaseOrder', 'purchaseOrders', 'smPos', 'procurementPos', 'queueSummary']) {
+        queryClient.invalidateQueries({ queryKey: [k] });
+      }
+      setConfirmProcured(false);
       setError(null);
-      navigation.navigate('PoQueue');
-      // Surfaced on the next screen; the GRN now sits in the store queue.
-      console.log('GRN created:', grn.grn_code);
     },
-    onError: (e) => setError(describeDbError(e, 'Handover')),
+    onError: (e) => setError(describeDbError(e, 'Purchase order')),
   });
 
   if (isLoading || !po) {
     return (
       <Screen>
-        <ActivityIndicator color={colors.indigo} style={{ marginTop: spacing.xl }} />
+        <ActivityIndicator color={colors.primary} style={{ marginTop: spacing.xl }} />
       </Screen>
     );
   }
 
   const items = po.po_items ?? [];
-  const busy = executeMutation.isPending || billMutation.isPending || handoverMutation.isPending;
+  const step = poFlowStep(po.status);
+  const canProcure =
+    (role === ROLES.STORE_MANAGER || role === ROLES.COMPANY_ADMIN) &&
+    (po.status === 'auto_generated' || po.status === 'draft');
 
   return (
     <Screen padded={false}>
-      <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
+      <ScrollView contentContainerStyle={styles.content}>
         <View style={styles.head}>
           <Text style={styles.code}>{po.po_code}</Text>
-          <StatusPill label={PO_STATUS_LABEL[po.status]} color={PO_STATUS_COLOR[po.status]} />
+          <StatusPill label={PO_STATUS_LABEL[po.status] ?? po.status} color={poStatusColor(po.status)} />
         </View>
         <Text style={styles.supplier}>{po.suppliers?.name ?? 'No supplier assigned'}</Text>
         <Text style={styles.meta}>
           {po.auto_created
-            ? `Raised automatically on thread shortfall${po.orders?.order_code ? ` for ${po.orders.order_code}` : ''}`
-            : 'Raised manually by procurement'}
+            ? `Raised automatically on a stock shortfall${
+                po.orders?.order_code ? ` for ${po.orders.order_code}` : ''
+              }`
+            : 'Raised by the store manager'}
         </Text>
 
         <View style={styles.stitch}>
           <StitchLine />
         </View>
+
+        {/* ---- The three statuses, on one line ---- */}
+        <View style={styles.flow}>
+          {PO_FLOW.map((f, i) => (
+            <React.Fragment key={f.key}>
+              {i > 0 ? (
+                <Ionicons
+                  name="arrow-forward"
+                  size={14}
+                  color={i <= step ? colors.primary : colors.border}
+                />
+              ) : null}
+              <View style={[styles.flowStep, i <= step && styles.flowStepOn]}>
+                <Text style={[styles.flowText, i <= step && styles.flowTextOn]}>{f.label}</Text>
+              </View>
+            </React.Fragment>
+          ))}
+        </View>
+        <Text style={styles.flowMeta}>
+          {po.procured_at ? `Procured ${new Date(po.procured_at).toLocaleDateString()}` : null}
+          {po.procured_at && po.paid_at ? ' · ' : null}
+          {po.paid_at ? `Paid ${new Date(po.paid_at).toLocaleDateString()}` : null}
+          {po.status === 'received' ? ' · Received into stock' : null}
+        </Text>
+
+        {error ? <Text style={styles.error}>{error}</Text> : null}
+
+        {/* ---- The one transition this screen offers ---- */}
+        {canProcure ? (
+          <AppButton
+            title="Procured"
+            icon="checkmark-circle-outline"
+            onPress={() => {
+              setError(null);
+              setConfirmProcured(true);
+            }}
+            loading={procured.isPending}
+            style={styles.action}
+          />
+        ) : null}
+
+        {po.status === 'procured' ? (
+          <ActionBanner
+            title="With the accountant"
+            subtitle="Bought from the supplier. The accountant pays it from their Payables ledger — there is no approval step in between."
+            style={styles.bannerGap}
+          />
+        ) : null}
+
+        {po.status === 'paid' ? (
+          <ActionBanner
+            tone="neutral"
+            title="Paid"
+            subtitle="A goods-receipt note is in the store manager's queue. Stock rises only once they confirm what physically arrived."
+            style={styles.bannerGap}
+          />
+        ) : null}
+
+        {po.status === 'received' ? (
+          <ActionBanner
+            tone="neutral"
+            title="Received into stock"
+            subtitle="The store manager confirmed receipt and inventory has been updated."
+            style={styles.bannerGap}
+          />
+        ) : null}
+
+        {/* ---- Save / download ---- */}
+        <AppButton
+          title="Save or share as PDF"
+          variant="secondary"
+          icon="download-outline"
+          loading={exporting}
+          disabled={exporting}
+          onPress={async () => {
+            setError(null);
+            setExporting(true);
+            try {
+              await sharePoPdf(po);
+            } catch (e) {
+              setError(describeDbError(e, 'Export'));
+            } finally {
+              setExporting(false);
+            }
+          }}
+          style={styles.action}
+        />
 
         {/* ---- Items ---- */}
         <Section title={`Items (${items.length})`}>
@@ -150,188 +213,43 @@ export function PoDetailScreen() {
                   {it.color_code ?? it.description}
                 </Text>
                 <Text style={[styles.td, styles.colQty, styles.mono]}>
-                  {Number(it.quantity_meters).toLocaleString()} m
+                  {Number(it.quantity_meters).toLocaleString()}
                 </Text>
               </View>
             ))}
           </View>
           {po.amount ? (
             <Text style={styles.amount}>
-              Bill amount: <Text style={styles.mono}>{Number(po.amount).toLocaleString()}</Text>
+              Amount: <Text style={styles.mono}>{Number(po.amount).toLocaleString()}</Text>
             </Text>
           ) : null}
           {po.notes ? <Text style={styles.note}>{po.notes}</Text> : null}
         </Section>
 
-        {/* ---- Lifecycle ---- */}
-        <Section title="Progress">
-          <Step label="Raised" done at={po.created_at} />
-          <Step label="Executed with supplier" done={!!po.executed_at} at={po.executed_at} />
-          <Step label="Supplier bill uploaded" done={!!po.bill_url} />
-          <Step
-            label="Owner approval"
-            done={!!po.approved_at}
-            at={po.approved_at}
-            waiting={po.status === 'awaiting_approval'}
-            waitingNote="Waiting on the owner's Approvals Inbox"
-          />
-          <Step
-            label="Accountant payment"
-            done={!!po.paid_at}
-            at={po.paid_at}
-            waiting={po.status === 'approved'}
-            waitingNote="Waiting on the accountant's Payables ledger"
-          />
-          <Step label="Handed over to store" done={['handed_over', 'received'].includes(po.status)} />
-          <Step label="Receipt confirmed by store" done={po.status === 'received'} />
-        </Section>
-
-        {/* ---- Actions, gated to procurement's own steps ---- */}
-        {error ? <Text style={styles.error}>{error}</Text> : null}
-
-        {po.status === 'auto_generated' || po.status === 'draft' ? (
-          <AppButton
-            title="Execute with supplier"
-            onPress={() => {
-              setError(null);
-              executeMutation.mutate();
-            }}
-            loading={executeMutation.isPending}
-            disabled={busy}
-          />
-        ) : null}
-
-        {po.status === 'executed' ? (
-          <Section title="Upload supplier bill">
-            <PhotoPicker
-              label="Supplier bill"
-              hint="Attach the bill; the PO then goes to the owner for approval."
-              photos={bill}
-              onChange={setBill}
-              multiple={false}
-            />
-            <TextField
-              label="Bill amount (optional)"
-              value={amount}
-              onChangeText={setAmount}
-              placeholder="42500"
-              numeric
-              mono
-            />
-            <AppButton
-              title="Upload bill & send for approval"
-              onPress={() => {
-                setError(null);
-                if (!bill[0]) {
-                  setError('Attach the supplier bill first.');
-                  return;
-                }
-                billMutation.mutate();
-              }}
-              loading={billMutation.isPending}
-              disabled={busy}
-            />
-          </Section>
-        ) : null}
-
-        {po.status === 'awaiting_approval' || po.status === 'approved' ? (
-          <ActionBanner
-            title={
-              po.status === 'awaiting_approval'
-                ? 'Waiting on owner approval'
-                : 'Approved — waiting on accountant payment'
-            }
-            subtitle={`Nothing to do here. This step is actioned from the ${
-              po.status === 'awaiting_approval'
-                ? "owner's Approvals Inbox"
-                : "accountant's Payables ledger"
-            }.`}
-            style={styles.bannerGap}
-          />
-        ) : null}
-
-        {po.status === 'paid' ? (
-          <AppButton
-            title="Confirm handover to store manager"
-            onPress={() => {
-              setError(null);
-              handoverMutation.mutate();
-            }}
-            loading={handoverMutation.isPending}
-            disabled={busy}
-          />
-        ) : null}
-
-        {po.status === 'handed_over' ? (
-          <ActionBanner
-            title="Handed over"
-            subtitle="A GRN is in the store manager's queue. Stock rises only once they confirm physical receipt."
-            style={styles.bannerGap}
-          />
-        ) : null}
-
-        {po.status === 'received' ? (
-          <ActionBanner
-            tone="neutral"
-            title="Received into stock"
-            subtitle="The store manager confirmed receipt and thread stock has been updated."
-            style={styles.bannerGap}
-          />
-        ) : null}
-
-        {/* ---- Bill preview ---- */}
+        {/* A bill uploaded before 0089 — procurement can no longer attach one,
+            but a historical PO that carries one should still show it. */}
         {billUrl ? (
           <Section title="Supplier bill">
             <Image source={{ uri: billUrl }} style={styles.bill} resizeMode="contain" />
           </Section>
         ) : null}
-
-        {/* ---- Printable view ---- */}
-        {Platform.OS === 'web' ? (
-          <AppButton
-            title="Print / save as PDF"
-            variant="secondary"
-            onPress={() => {
-              if (typeof window !== 'undefined') window.print();
-            }}
-            style={{ marginTop: spacing.lg }}
-          />
-        ) : null}
       </ScrollView>
-    </Screen>
-  );
-}
 
-function Step({
-  label,
-  done,
-  at,
-  waiting,
-  waitingNote,
-}: {
-  label: string;
-  done?: boolean;
-  at?: string | null;
-  waiting?: boolean;
-  waitingNote?: string;
-}) {
-  return (
-    <View style={styles.step}>
-      <View
-        style={[
-          styles.stepDot,
-          done && { backgroundColor: colors.success, borderColor: colors.success },
-          waiting && { backgroundColor: colors.warning, borderColor: colors.warning },
-        ]}
+      <ConfirmDialog
+        visible={confirmProcured}
+        title="Mark this purchase order procured?"
+        message={`${po.po_code} goes to the accountant to be paid. Only do this once you have actually placed the order with ${
+          po.suppliers?.name ?? 'the supplier'
+        }.`}
+        confirmLabel="Procured"
+        loading={procured.isPending}
+        onConfirm={() => procured.mutate()}
+        onCancel={() => {
+          setConfirmProcured(false);
+          setError(null);
+        }}
       />
-      <View style={{ flex: 1 }}>
-        <Text style={[styles.stepLabel, done && { color: colors.indigoDeep }]}>{label}</Text>
-        <Text style={styles.stepState}>
-          {done ? `Done${at ? ` · ${new Date(at).toLocaleDateString()}` : ''}` : waiting ? 'Waiting' : 'Not started'}
-        </Text>
-        {waiting && waitingNote ? <Text style={styles.stepNote}>{waitingNote}</Text> : null}
-      </View>
-    </View>
+    </Screen>
   );
 }
 
@@ -345,18 +263,49 @@ function Section({ title, children }: { title: string; children: React.ReactNode
 }
 
 const styles = StyleSheet.create({
-  bannerGap: { marginBottom: spacing.lg },
-  content: { padding: spacing.xl },
-  head: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: spacing.sm },
-  code: { fontFamily: fontFamily.mono, fontSize: fontSize.title, color: colors.indigoDeep, fontWeight: fontWeight.semibold },
-  supplier: { marginTop: spacing.xs, fontSize: fontSize.body, color: colors.indigoDeep },
-  meta: { marginTop: 2, fontSize: fontSize.caption, color: colors.slate },
+  content: { padding: spacing.lg, paddingBottom: spacing.xxl },
+  head: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: spacing.sm,
+  },
+  code: {
+    fontFamily: fontFamily.mono,
+    fontSize: fontSize.title,
+    color: colors.ink,
+    fontWeight: fontWeight.semibold,
+  },
+  supplier: { marginTop: spacing.xs, fontSize: fontSize.body, color: colors.ink },
+  meta: { marginTop: 2, fontSize: fontSize.caption, color: colors.inkMuted },
   stitch: { marginVertical: spacing.lg },
-  section: { marginBottom: spacing.xl },
+
+  flow: { flexDirection: 'row', alignItems: 'center', gap: spacing.xs, flexWrap: 'wrap' },
+  flowStep: {
+    paddingHorizontal: spacing.md,
+    paddingVertical: 6,
+    borderRadius: radius.pill,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.surface,
+  },
+  flowStepOn: { backgroundColor: colors.primary, borderColor: colors.primary },
+  flowText: {
+    fontFamily: fontFamily.sansMedium,
+    fontSize: fontSize.caption,
+    color: colors.inkMuted,
+    fontWeight: fontWeight.medium,
+  },
+  flowTextOn: { color: colors.white, fontWeight: fontWeight.semibold },
+  flowMeta: { marginTop: spacing.sm, fontSize: fontSize.caption, color: colors.inkMuted },
+
+  action: { marginTop: spacing.lg },
+  bannerGap: { marginTop: spacing.lg },
+  section: { marginTop: spacing.xl },
   sectionTitle: {
     fontSize: fontSize.caption,
     fontWeight: fontWeight.medium,
-    color: colors.slate,
+    color: colors.inkMuted,
     textTransform: 'uppercase',
     letterSpacing: 0.5,
     marginBottom: spacing.sm,
@@ -368,36 +317,29 @@ const styles = StyleSheet.create({
     overflow: 'hidden',
     backgroundColor: colors.surface,
   },
-  tableHeadRow: { flexDirection: 'row', backgroundColor: colors.indigo, paddingVertical: spacing.sm, paddingHorizontal: spacing.md },
-  th: { color: colors.white, fontSize: fontSize.caption, fontWeight: fontWeight.semibold },
-  tableRow: { flexDirection: 'row', paddingVertical: spacing.sm, paddingHorizontal: spacing.md, borderTopWidth: 1, borderTopColor: colors.border },
-  td: { fontSize: fontSize.secondary, color: colors.indigoDeep },
-  colItem: { flex: 1 },
-  colQty: { width: 110, textAlign: 'right' },
+  tableHeadRow: {
+    flexDirection: 'row',
+    backgroundColor: colors.bg,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.border,
+  },
+  tableRow: {
+    flexDirection: 'row',
+    borderBottomWidth: 1,
+    borderBottomColor: colors.border,
+  },
+  th: {
+    padding: spacing.sm,
+    fontSize: fontSize.caption,
+    fontWeight: fontWeight.medium,
+    color: colors.inkMuted,
+  },
+  td: { padding: spacing.sm, fontSize: fontSize.secondary, color: colors.ink },
+  colItem: { flex: 2 },
+  colQty: { flex: 1, textAlign: 'right' },
   mono: { fontFamily: fontFamily.mono },
-  amount: { marginTop: spacing.sm, fontSize: fontSize.secondary, color: colors.indigoDeep },
-  note: { marginTop: spacing.xs, fontSize: fontSize.caption, color: colors.slate, fontStyle: 'italic' },
-  step: { flexDirection: 'row', gap: spacing.md, marginBottom: spacing.md, alignItems: 'flex-start' },
-  stepDot: {
-    width: 14,
-    height: 14,
-    borderRadius: 7,
-    borderWidth: 2,
-    borderColor: colors.border,
-    backgroundColor: 'transparent',
-    marginTop: 3,
-  },
-  stepLabel: { fontSize: fontSize.secondary, color: colors.slate, fontWeight: fontWeight.medium },
-  stepState: { fontSize: fontSize.caption, color: colors.slate },
-  stepNote: { marginTop: 2, fontSize: fontSize.caption, color: colors.warning },
-  error: { color: colors.alert, fontSize: fontSize.secondary, marginBottom: spacing.sm },
-  banner: { padding: spacing.md, borderRadius: radius.md, borderWidth: 1, marginBottom: spacing.lg },
-  bill: {
-    width: '100%',
-    height: 280,
-    borderRadius: radius.md,
-    borderWidth: 1,
-    borderColor: colors.border,
-    backgroundColor: colors.surface,
-  },
+  amount: { marginTop: spacing.sm, fontSize: fontSize.secondary, color: colors.ink },
+  note: { marginTop: spacing.xs, fontSize: fontSize.caption, color: colors.inkMuted },
+  bill: { width: '100%', height: 260, borderRadius: radius.md, backgroundColor: colors.bg },
+  error: { marginTop: spacing.md, fontSize: fontSize.secondary, color: colors.alert },
 });

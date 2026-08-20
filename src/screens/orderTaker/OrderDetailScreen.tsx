@@ -76,14 +76,76 @@ export function OrderDetailScreen() {
     queryKey: ['repeats', orderId],
     queryFn: () => listRepeats(orderId),
   });
+  /**
+   * Signed URLs for every photo this screen shows — the order's own strip AND
+   * the one attached to each timeline step (0087).
+   *
+   * Resolved in ONE batched call rather than per step: `createSignedUrls` takes
+   * a list, and a timeline with eight stages would otherwise fire eight
+   * round-trips every time the screen mounts.
+   */
+  const timelinePaths = (timeline ?? [])
+    .map((t) => t.photo_url)
+    .filter(Boolean) as string[];
+
   const { data: photoUrls } = useQuery({
-    queryKey: ['orderPhotos', orderId, order?.cloth_photos?.length, order?.design_sheet_url],
+    queryKey: [
+      'orderPhotos',
+      orderId,
+      order?.cloth_photos?.length,
+      order?.design_sheet_url,
+      timelinePaths.join(','),
+    ],
     queryFn: () =>
       getPhotoUrls(
-        [...(order?.cloth_photos ?? []), order?.design_sheet_url].filter(Boolean) as string[]
+        // De-duplicated: the cloth photo is both the order's own and the
+        // "Order captured" step's, and asking for the same path twice wastes a
+        // slot in a request that is already the widest one on this screen.
+        Array.from(
+          new Set(
+            [
+              ...(order?.cloth_photos ?? []),
+              order?.design_sheet_url,
+              ...timelinePaths,
+            ].filter(Boolean) as string[]
+          )
+        )
       ),
     enabled: !!order,
   });
+
+  const totalRepeats = (sheets ?? []).reduce((n, s) => n + s.repeats_count, 0);
+
+  /**
+   * One line per colour, with that colour's repeats added up across its sheets.
+   *
+   * ABOVE the loading/error early returns on purpose: it is a hook, and a hook
+   * that only runs on some renders is a hooks-order violation — React bails out
+   * of the whole screen with "rendered more hooks than during the previous
+   * render" the moment the query resolves.
+   */
+  const byColor = React.useMemo(() => {
+    const map = new Map<
+      string,
+      { color: string; repeats: number; stitchCount: number; threads: string[] }
+    >();
+    for (const s of sheets ?? []) {
+      const key = s.color_assignment ?? '—';
+      const cur = map.get(key);
+      if (cur) {
+        cur.repeats += s.repeats_count;
+        for (const t of s.thread_color_codes) if (!cur.threads.includes(t)) cur.threads.push(t);
+      } else {
+        map.set(key, {
+          color: key,
+          repeats: s.repeats_count,
+          stitchCount: s.stitch_count,
+          threads: [...s.thread_color_codes],
+        });
+      }
+    }
+    return [...map.values()];
+  }, [sheets]);
 
   if (isLoading) {
     return (
@@ -99,8 +161,6 @@ export function OrderDetailScreen() {
       </Screen>
     );
   }
-
-  const totalRepeats = (sheets ?? []).reduce((n, s) => n + s.repeats_count, 0);
 
   return (
     <Screen padded={false}>
@@ -136,7 +196,11 @@ export function OrderDetailScreen() {
         {/* ---- Timeline (from repeat_stage_history) ---- */}
         <Section title="Progress">
           {timeline?.length ? (
-            <StageProgress steps={timeline} orientation="vertical" />
+            <StageProgress
+              steps={timeline}
+              orientation="vertical"
+              photoUrls={photoUrls ?? {}}
+            />
           ) : (
             <Text style={styles.body}>No progress recorded yet.</Text>
           )}
@@ -168,24 +232,33 @@ export function OrderDetailScreen() {
           </Section>
         ) : null}
 
-        {/* ---- Sheets ---- */}
-        <Section title={`Sheets (${sheets?.length ?? 0})`}>
-          {(sheets ?? []).map((s) => (
-            <View key={s.id} style={styles.card}>
-              <Text style={styles.cardTitle}>
-                Sheet {s.sheet_number} · {s.color_assignment}
+        {/* ---- Repeats, by colour ----
+            Grouped by colour rather than listed per sheet: `sheets` is the row
+            shape the database needs, not a quantity the order taker ordered or
+            can act on, and showing both counts side by side was the confusion
+            this section is fixing. Two sheets of the same colour are one line
+            here with their repeats added together. */}
+        <Section title={`Repeats (${totalRepeats})`}>
+          {byColor.map((c) => (
+            <View key={c.color} style={styles.card}>
+              <Text style={styles.cardTitle}>{c.color}</Text>
+              <Text style={styles.cardLine}>
+                <Text style={styles.mono}>{c.repeats}</Text> repeat{c.repeats === 1 ? '' : 's'}
+                {c.stitchCount > 0 ? (
+                  <>
+                    {' · '}
+                    <Text style={styles.mono}>{c.stitchCount.toLocaleString()}</Text> stitches each
+                  </>
+                ) : null}
               </Text>
               <Text style={styles.cardLine}>
-                <Text style={styles.mono}>{s.repeats_count}</Text> repeats ·{' '}
-                <Text style={styles.mono}>{s.stitch_count.toLocaleString()}</Text> stitches each
-              </Text>
-              <Text style={styles.cardLine}>
-                Threads: <Text style={styles.mono}>{s.thread_color_codes.join(', ') || '—'}</Text>
+                Threads: <Text style={styles.mono}>{c.threads.join(', ') || '—'}</Text>
               </Text>
             </View>
           ))}
           <Text style={styles.totalLine}>
-            Total: <Text style={styles.mono}>{totalRepeats}</Text> repeats
+            Total: <Text style={styles.mono}>{totalRepeats}</Text> repeat
+            {totalRepeats === 1 ? '' : 's'}
             {repeats?.length ? (
               <>
                 {' · '}
@@ -224,7 +297,7 @@ export function OrderDetailScreen() {
                 </View>
                 <Text style={styles.cardLine}>
                   Stage: {d.stage_type.replace(/_/g, ' ')}
-                  {d.sheets ? ` · Sheet ${d.sheets.sheet_number}` : ''}
+                  {d.sheets ? ` · ${d.sheets.color_assignment}` : ''}
                   {d.repeats ? ` · ${d.repeats.repeat_code}` : ''}
                 </Text>
                 {d.note ? <Text style={styles.cardLine}>{d.note}</Text> : null}

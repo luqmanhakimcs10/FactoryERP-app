@@ -10,6 +10,7 @@ import { supabase } from '../client';
 import type {
   ThreadStock,
   PurchaseOrder,
+  PoStatus,
   Grn,
   MaterialIssueQueueRow,
   JobCardRequirement,
@@ -154,7 +155,7 @@ export async function getOpeningStockState(
 }
 
 // ---------------------------------------------------------------------------
-// Procurement transitions
+// Purchase-order transitions
 // ---------------------------------------------------------------------------
 
 export async function createManualPo(args: {
@@ -171,33 +172,43 @@ export async function createManualPo(args: {
   return data as PurchaseOrder;
 }
 
-export async function executePo(poId: string): Promise<PurchaseOrder> {
-  const { data, error } = await supabase.rpc('po_execute', { p_po_id: poId });
-  if (error) throw error;
-  return data as PurchaseOrder;
-}
-
-export async function uploadPoBill(
-  poId: string,
-  billUrl: string,
-  amount?: number | null
-): Promise<PurchaseOrder> {
-  const { data, error } = await supabase.rpc('po_upload_bill', {
-    p_po_id: poId,
-    p_bill_url: billUrl,
-    p_amount: amount ?? null,
-  });
-  if (error) throw error;
-  return data as PurchaseOrder;
-}
-
-export async function handoverPoToStore(poId: string, note?: string | null): Promise<Grn> {
-  const { data, error } = await supabase.rpc('po_handover_to_store', {
+/**
+ * Creation -> Procured. The store manager, once they have actually bought it.
+ *
+ * `executePo`, `uploadPoBill` and `handoverPoToStore` were here. Procurement is
+ * read-only from 0089, and the RPCs behind all three were DROPPED rather than
+ * hidden — they were SECURITY DEFINER and callable straight over REST, so
+ * removing the buttons alone would have left the transitions open. The handover
+ * they used to perform is now raised by the accountant's payment.
+ */
+export async function markPoProcured(poId: string, note?: string | null): Promise<PurchaseOrder> {
+  const { data, error } = await supabase.rpc('sm_mark_po_procured', {
     p_po_id: poId,
     p_note: note ?? null,
   });
   if (error) throw error;
-  return data as Grn;
+  return data as PurchaseOrder;
+}
+
+/** Procurement's read-only list — the two buckets behind their two tabs. */
+export interface ProcurementPoRow {
+  id: string;
+  po_code: string;
+  status: PoStatus;
+  supplier_name: string | null;
+  order_code: string | null;
+  line_count: number;
+  total_quantity: number;
+  amount: number | null;
+  created_at: string;
+}
+
+export async function listProcurementPos(
+  bucket: 'pending' | 'completed'
+): Promise<ProcurementPoRow[]> {
+  const { data, error } = await supabase.rpc('proc_po_list', { p_bucket: bucket });
+  if (error) throw error;
+  return (data ?? []) as ProcurementPoRow[];
 }
 
 // ---------------------------------------------------------------------------

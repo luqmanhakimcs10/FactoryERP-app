@@ -207,11 +207,13 @@ function OrderRow({ order, onPress }: { order: OrderListRow; onPress: () => void
         {order.vendor_name}
       </Text>
       {/* Created date, order number, company and status are what the row must
-          carry; sheets/repeats stay as the supporting detail. */}
+          carry; the repeat count is the supporting detail. The sheet count used
+          to sit beside it — two numbers for one order, only one of which the
+          order taker chose — and is gone. */}
       <Text style={styles.meta}>
-        {new Date(order.created_at).toLocaleDateString()} · {order.sheet_count} sheet
-        {order.sheet_count === 1 ? '' : 's'} ·{' '}
-        <Text style={styles.mono}>{order.repeat_total}</Text> repeats
+        {new Date(order.created_at).toLocaleDateString()} ·{' '}
+        <Text style={styles.mono}>{order.repeat_total}</Text> repeat
+        {order.repeat_total === 1 ? '' : 's'}
       </Text>
     </Pressable>
   );

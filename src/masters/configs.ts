@@ -25,7 +25,10 @@ export const VENDORS: MasterEntityConfig = {
     { key: 'address', label: 'Address', type: 'textarea', placeholder: 'Street, city' },
     { key: 'rate_per_repeat', label: 'Rate per repeat', type: 'number', mono: true, min: 0, step: 0.01, placeholder: '0.00' },
     { key: 'rate_per_stitch', label: 'Rate per stitch', type: 'number', mono: true, min: 0, step: 0.0001, placeholder: '0.0000' },
-    { key: 'price', label: 'Price', type: 'number', mono: true, min: 0, step: 0.01, placeholder: '0.00' },
+    // `price` was a third rate with no rule saying when it applied; it is gone
+    // from the card and dropped from the table (0086). The billing date is what
+    // replaced it: the day this client is invoiced on.
+    { key: 'billing_date', label: 'Billing date', type: 'date', placeholder: 'Not set' },
   ],
 };
 
@@ -44,6 +47,20 @@ export const SUPPLIERS: MasterEntityConfig = {
     { key: 'contact', label: 'Contact', type: 'text', placeholder: 'Phone or email', mono: true },
     { key: 'address', label: 'Address', type: 'textarea', placeholder: 'Street, city' },
     { key: 'payment_day', label: 'Payment day', type: 'number', mono: true, min: 1, max: 31, placeholder: 'e.g. 5' },
+    {
+      // Which stock this supplier is a source for. Same four values
+      // `inventory_items.item_type` allows, so a PO raised against them can
+      // only ever name a type they actually sell.
+      key: 'inventory_types',
+      label: 'Supplies which inventory types',
+      type: 'multiselect',
+      options: [
+        { value: 'thread', label: 'Thread' },
+        { value: 'tilla', label: 'Tilla' },
+        { value: 'sequin', label: 'Sequin' },
+        { value: 'bobbin', label: 'Bobbin' },
+      ],
+    },
   ],
 };
 
@@ -53,38 +70,36 @@ export const MACHINES: MasterEntityConfig = {
   singular: 'Machine',
   plural: 'Machines',
   titleField: 'name',
-  subtitleFields: ['machine_type'],
   searchField: 'name',
   module: 'machine_workforce',
   writeRoles: [ROLES.COMPANY_ADMIN, ROLES.FLOOR_MANAGER],
   archiveRoles: [ROLES.COMPANY_ADMIN],
+  // ONE FIELD. The machine-type selector is gone: a machine is identified on
+  // the floor by its number, and the eleven categories behind that selector
+  // never decided anything — no routing, no rate, no capability check read
+  // them. `machines.machine_type` keeps its NOT NULL default in the database
+  // so existing rows and the accountant's fleet screen are unaffected; it is
+  // simply no longer asked for or shown here.
   fields: [
-    { key: 'name', label: 'Machine name / number', type: 'text', required: true, placeholder: 'e.g. M-12', mono: true },
     {
-      key: 'machine_type',
-      label: 'Machine type',
-      type: 'select',
+      key: 'name',
+      label: 'Machine number',
+      type: 'text',
       required: true,
-      options: [
-        { value: 'sewing_machine', label: 'Sewing machine' },
-        { value: 'overlock', label: 'Overlock' },
-        { value: 'flatlock', label: 'Flatlock' },
-        { value: 'embroidery_machine', label: 'Embroidery' },
-        { value: 'cutter', label: 'Cutter' },
-        { value: 'press_machine', label: 'Press' },
-        { value: 'button_attaching', label: 'Button attaching' },
-        { value: 'piko', label: 'Piko' },
-        { value: 'karandi', label: 'Karandi' },
-        { value: 'fusing', label: 'Fusing' },
-        { value: 'other', label: 'Other' },
-      ],
+      placeholder: 'e.g. M-12',
+      mono: true,
     },
   ],
 };
 
 /**
- * The one entity with non-trivial fields: a `select` (stage_type, rate_basis),
- * a `number` (rate), and a `linked` record (the partner's own login).
+ * Finishing partners no longer hold an account.
+ *
+ * The `user_id` "Partner login" field and the "Extended partner" checkbox are
+ * both gone. A partner is now reached by ONE persistent link generated when the
+ * record is created (0086) — shown, copied and shared from this card once the
+ * record exists, which is why the link is rendered by MasterFormScreen rather
+ * than declared as a field here: there is nothing to type into it.
  */
 export const FINISHING_PARTNERS: MasterEntityConfig = {
   key: 'finishing_partners',
@@ -130,22 +145,6 @@ export const FINISHING_PARTNERS: MasterEntityConfig = {
       min: 0,
       step: 0.0001,
       placeholder: '0.0000',
-    },
-    {
-      key: 'user_id',
-      label: 'Partner login (for their dashboard)',
-      type: 'linked',
-      linkedTo: {
-        table: 'profiles',
-        labelColumn: 'display_name',
-        filter: { role: 'finishing_partner' },
-        emptyLabel: 'No login linked',
-      },
-    },
-    {
-      key: 'is_extended_partner',
-      label: 'Extended partner (handles additional stages)',
-      type: 'checkbox',
     },
   ],
 };

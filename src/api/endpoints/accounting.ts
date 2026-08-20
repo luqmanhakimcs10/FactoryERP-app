@@ -30,7 +30,8 @@ export interface ClientSummary {
   address: string | null;
   rate_per_repeat: number | null;
   rate_per_stitch: number | null;
-  price: number | null;
+  /** Replaced `price` in 0086 — the day this client is invoiced on. */
+  billing_date: string | null;
   invoice_count: number;
   unpaid_count: number;
   total_income: number;

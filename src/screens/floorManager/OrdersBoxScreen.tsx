@@ -32,6 +32,7 @@ import { useAuth } from '../../auth/AuthContext';
 import { useNextStep, NEXT_STEP } from '../../components/ui/NextStepToast';
 import { getHandoverQueue } from '../../api/endpoints/storeManager';
 import { describeDbError } from '../../utils/errors';
+import { ACTIVE_ORDER_STATUSES } from '../../models/orderTypes';
 import type { OrderListRow, OrderStatus } from '../../models/orderTypes';
 import type { PendingMaterialIssueRow } from '../../models/inventoryTypes';
 import {
@@ -44,19 +45,7 @@ import {
   tint,
 } from '../../constants/theme';
 
-const ACTIVE_STATUSES: OrderStatus[] = [
-  'awaiting_procurement',
-  'awaiting_cloth_inspection',
-  'awaiting_coding',
-  'awaiting_job_card',
-  'job_card_shared',
-  'job_card_confirmed',
-  'machine_selection_pending',
-  'in_production',
-  'in_finishing',
-  'awaiting_final_qa',
-  'ready_for_delivery',
-];
+const ACTIVE_STATUSES = ACTIVE_ORDER_STATUSES;
 const JOB_CARD_STATUSES: OrderStatus[] = ['awaiting_job_card', 'job_card_shared'];
 
 type TabKey = 'overview' | 'job_card' | 'accept_inventory' | 'final_qa' | 'handover';
@@ -183,23 +172,27 @@ export function OrdersBoxScreen() {
                   startProductionMutation.mutate(item.id);
                 }}
                 starting={startProductionMutation.isPending && startProductionMutation.variables === item.id}
-                action={inProduction ? 'Stage tracking' : undefined}
+                action={inProduction ? 'Order details' : undefined}
+                /*
+                 * ALWAYS the three-tab order screen. An order in production used
+                 * to open Stage Tracking instead, which meant the one order the
+                 * granular status board is most useful for was the one order you
+                 * could not reach it from. Stage Tracking is still one tap away —
+                 * it is the button on the Progress tab, where the piece-by-piece
+                 * actions belong.
+                 */
                 onPress={() => {
-                  if (inProduction) {
-                    navigation.navigate('StageTracking', { orderId: item.id });
-                  } else if (!atMachineStep) {
-                    navigation.navigate('OrderDetail', { orderId: item.id });
+                  if (!atMachineStep) {
+                    navigation.navigate('FmOrderDetail', { orderId: item.id });
                   }
                 }}
               />
             );
           }}
-          ListFooterComponent={
-            <View style={styles.footer}>
-              <Text style={styles.sectionTitle}>Master data</Text>
-              <ListRow title="Vendors" onPress={() => navigation.navigate('MasterList', { entity: 'vendors' })} />
-            </View>
-          }
+          /* The "Master data · Vendors" shortcut was here. Master data is the
+             company admin's, not the floor's — a link to the client list on the
+             screen where production is run is a door to a section this role has
+             no reason to open mid-shift. */
         />
       ) : null}
 
@@ -216,7 +209,7 @@ export function OrdersBoxScreen() {
           ListEmptyComponent={
             !jobCardLoading ? (
               <Text style={styles.emptyBody}>
-                Orders appear here once Initial QA marks "Continue to job card."
+                Orders appear here once QA marks "Continue to job card."
               </Text>
             ) : null
           }

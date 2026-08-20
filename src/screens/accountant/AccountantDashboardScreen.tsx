@@ -14,10 +14,18 @@ import { Screen } from '../../components/ui/Screen';
 import { DashboardHeader } from '../../components/ui/DashboardHeader';
 import { TaskBanners } from '../../components/ui/TaskBanners';
 import { MasterCard, CardGrid } from '../../components/ui/MasterCard';
+import { StatCard, StatGrid } from '../../components/ui/StatGrid';
+import { statCount, statMoney } from '../../utils/statValue';
 import { matchesSearch } from '../../utils/search';
 import { countMasters } from '../../api/endpoints/masters';
 import { countEmployees } from '../../api/endpoints/employees';
-import { countInvoices } from '../../api/endpoints/accounting';
+import {
+  countInvoices,
+  getReceivableSummary,
+  getSalaryOutstanding,
+  listPayableSupplierPos,
+  listPayablePartners,
+} from '../../api/endpoints/accounting';
 import { colors, spacing, fontSize } from '../../constants/theme';
 
 interface CardConfig {
@@ -83,8 +91,37 @@ const CARDS: CardConfig[] = [
 ];
 
 export function AccountantDashboardScreen() {
+  /**
+   * PAYABLES DUE is suppliers + finishing partners — the two ledgers the
+   * accountant's own Invoices screen already loads. Approved expenses are NOT
+   * in it: `acct_payable_expenses` is per-category, so folding them in would be
+   * two more round-trips on a dashboard for a figure the Invoices screen breaks
+   * out properly anyway.
+   */
   const navigation = useNavigation<any>();
   const [search, setSearch] = useState('');
+
+  const metrics = useQuery({
+    queryKey: ['accountantMetrics'],
+    queryFn: async () => {
+      const [receivable, salary, supplierPos, partners] = await Promise.all([
+        getReceivableSummary().catch(() => null),
+        getSalaryOutstanding().catch(() => null),
+        listPayableSupplierPos().catch(() => []),
+        listPayablePartners().catch(() => []),
+      ]);
+      const supplierDue = supplierPos.reduce((n, p) => n + Number(p.amount ?? 0), 0);
+      // `payable` is the field `acct_payable_partners` returns — typed, so a
+      // rename breaks the build rather than silently summing zero.
+      const partnerDue = partners.reduce((n, p) => n + Number(p.payable ?? 0), 0);
+      return {
+        payables: supplierDue + partnerDue,
+        receivables: receivable?.pending ?? 0,
+        posAwaitingPayment: supplierPos.length,
+        pendingSalaries: salary?.pending_count ?? 0,
+      };
+    },
+  });
 
   const { data, isError } = useQuery({
     queryKey: ['accountantCardCounts'],
@@ -128,6 +165,34 @@ export function AccountantDashboardScreen() {
       />
       <ScrollView contentContainerStyle={styles.container}>
         <TaskBanners />
+
+        <View style={styles.metrics}>
+          <StatGrid>
+            <StatCard
+              label="Payables due"
+              value={metrics.isError ? '—' : statMoney(metrics.data?.payables)}
+              icon="arrow-up-circle-outline"
+              tone={(metrics.data?.payables ?? 0) > 0 ? 'attention' : 'neutral'}
+            />
+            <StatCard
+              label="Receivables due"
+              value={metrics.isError ? '—' : statMoney(metrics.data?.receivables)}
+              icon="arrow-down-circle-outline"
+            />
+            <StatCard
+              label="POs awaiting payment"
+              value={statCount(metrics.data?.posAwaitingPayment)}
+              icon="document-text-outline"
+              tone={metrics.data?.posAwaitingPayment ? 'attention' : 'neutral'}
+            />
+            <StatCard
+              label="Pending salary runs"
+              value={statCount(metrics.data?.pendingSalaries)}
+              icon="people-outline"
+              tone={metrics.data?.pendingSalaries ? 'attention' : 'neutral'}
+            />
+          </StatGrid>
+        </View>
         <CardGrid>
           {visible.map((card) => (
             <MasterCard
@@ -151,6 +216,7 @@ export function AccountantDashboardScreen() {
 }
 
 const styles = StyleSheet.create({
+  metrics: { marginBottom: spacing.lg },
   container: { padding: spacing.lg, paddingTop: spacing.xl },
   banner: { marginBottom: spacing.lg },
   empty: {

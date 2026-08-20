@@ -26,6 +26,8 @@ import { Screen } from '../../components/ui/Screen';
 import { DashboardHeader } from '../../components/ui/DashboardHeader';
 import { TaskBanners } from '../../components/ui/TaskBanners';
 import { MasterCard, CardGrid, type MasterCardProps } from '../../components/ui/MasterCard';
+import { StatCard, StatGrid } from '../../components/ui/StatGrid';
+import { statCount } from '../../utils/statValue';
 import { matchesSearch } from '../../utils/search';
 import {
   listStorePos,
@@ -53,7 +55,28 @@ export function StoreManagerHomeScreen() {
         openPos: pos.filter((p) => !['received', 'cancelled'].includes(p.status)).length,
         items: inventory.length,
         auditDone: !!audit.done,
-        openRequests: requests.filter((r) => r.status === 'pending').length,
+        /*
+         * DIRECTED TO THE STORE MANAGER, not every pending row.
+         *
+         * `material_request_history` returns the whole table, and most pending
+         * rows are `auto_stock_ready` ones aimed at the FLOOR manager — the
+         * "your material is already in stock" notice. Counting those put the
+         * floor's queue on the store's dashboard: 21 against the 1 request
+         * actually waiting on this role.
+         */
+        openRequests: requests.filter(
+          (r) => r.status === 'pending' && r.directed_to === 'store_manager'
+        ).length,
+        // "In progress" in the 0089 sense: bought or still to buy, not yet paid.
+        posInProgress: pos.filter((p) =>
+          ['auto_generated', 'draft', 'procured'].includes(p.status)
+        ).length,
+        // An item is low when it has a threshold and has fallen under it. Items
+        // with no threshold are not low — they are unmonitored, which is a
+        // different problem and not one a count can state.
+        lowStock: inventory.filter(
+          (i) => i.reorder_threshold != null && Number(i.quantity) < Number(i.reorder_threshold)
+        ).length,
       };
     },
   });
@@ -118,6 +141,40 @@ export function StoreManagerHomeScreen() {
       <ScrollView contentContainerStyle={styles.container}>
         <TaskBanners />
 
+        <View style={styles.metrics}>
+          <StatGrid>
+            <StatCard
+              label="Pending material requests"
+              value={statCount(data?.openRequests)}
+              icon="cube-outline"
+              tone={data?.openRequests ? 'attention' : 'neutral'}
+              onPress={() => navigation.navigate('StoreRequestsSection')}
+            />
+            <StatCard
+              label="POs in progress"
+              value={statCount(data?.posInProgress)}
+              icon="document-text-outline"
+              onPress={() => navigation.navigate('StorePoSection')}
+            />
+            <StatCard
+              label="Low stock items"
+              value={statCount(data?.lowStock)}
+              icon="alert-circle-outline"
+              tone={data?.lowStock ? 'attention' : 'neutral'}
+              onPress={() => navigation.navigate('StoreInventorySection')}
+            />
+            <StatCard
+              label="Today's audit"
+              // A yes/no, not a count — the brief asks for an indicator, and a
+              // "1" here would read as one item audited.
+              value={data === undefined ? '—' : data.auditDone ? 'Done' : 'Not done'}
+              icon="checkmark-done-outline"
+              tone={data && !data.auditDone ? 'attention' : 'neutral'}
+              onPress={() => navigation.navigate('DailyAudit')}
+            />
+          </StatGrid>
+        </View>
+
         <CardGrid>
           {visible.map(({ key, ...card }) => (
             <MasterCard key={key} {...card} />
@@ -134,6 +191,7 @@ export function StoreManagerHomeScreen() {
 }
 
 const styles = StyleSheet.create({
+  metrics: { marginBottom: spacing.lg },
   container: { padding: spacing.lg, paddingTop: spacing.xl },
   empty: {
     paddingTop: spacing.xl,

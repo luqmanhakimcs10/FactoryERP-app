@@ -10,7 +10,17 @@
  */
 import type { Role, ModuleKey } from '../constants/roles';
 
-export type FieldType = 'text' | 'textarea' | 'number' | 'select' | 'linked' | 'checkbox';
+export type FieldType =
+  | 'text'
+  | 'textarea'
+  | 'number'
+  | 'select'
+  | 'linked'
+  | 'checkbox'
+  /** Calendar picker. Stored and returned as `YYYY-MM-DD`. */
+  | 'date'
+  /** Several of a fixed option set. Stored as a Postgres text[]. */
+  | 'multiselect';
 
 export interface SelectOption {
   value: string;
@@ -26,7 +36,7 @@ export interface FieldConfig {
   placeholder?: string;
   /** Render in monospace — for codes, rates, and other reference/identifier values. */
   mono?: boolean;
-  /** `select` only: the fixed option set. */
+  /** `select` and `multiselect` only: the fixed option set. */
   options?: SelectOption[];
   /**
    * `linked` only: where to pull selectable records from.

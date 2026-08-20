@@ -9,6 +9,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import { Screen } from '../../components/ui/Screen';
 import { AppButton } from '../../components/ui/AppButton';
 import { TextField } from '../../components/forms/TextField';
+import { DateField } from '../../components/forms/DateField';
 import { saCreateFactory } from '../../api/endpoints/factories';
 import { describeDbError } from '../../utils/errors';
 import { MODULES, MODULE_LABEL, type ModuleKey } from '../../constants/roles';
@@ -31,7 +32,7 @@ export function NewFactoryScreen() {
   const [phone, setPhone] = useState('');
   const [address, setAddress] = useState('');
   const [subscriptionAmount, setSubscriptionAmount] = useState('');
-  const [nextBillingDate, setNextBillingDate] = useState('');
+  const [nextBillingDate, setNextBillingDate] = useState<string | null>(null);
   const [selectedModules, setSelectedModules] = useState<ModuleKey[]>([...ALL_MODULE_KEYS]);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -58,7 +59,7 @@ export function NewFactoryScreen() {
         address: address.trim() || undefined,
         subscription_amount: subscriptionAmount ? Number(subscriptionAmount) : 0,
         module_keys: selectedModules,
-        next_billing_date: nextBillingDate.trim() || null,
+        next_billing_date: nextBillingDate,
       });
       await queryClient.invalidateQueries({ queryKey: ['saFactoryList'] });
       navigation.replace('FactoryDetail', { factoryId: factory.id });
@@ -102,11 +103,11 @@ export function NewFactoryScreen() {
           numeric
           placeholder="25000"
         />
-        <TextField
+        <DateField
           label="Next billing date"
           value={nextBillingDate}
-          onChangeText={setNextBillingDate}
-          placeholder="YYYY-MM-DD"
+          onChange={setNextBillingDate}
+          placeholder="Not set"
         />
 
         <Text style={styles.sectionLabel}>Modules to enable</Text>

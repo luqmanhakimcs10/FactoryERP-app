@@ -445,6 +445,77 @@ export interface ColorRequirement {
   stitches_known: boolean;
 }
 
+/**
+ * Everyone and everything involved in one order, with when they got involved —
+ * the Floor Manager's Order Details tab (0088).
+ *
+ * One call rather than a query per role: the tab is a single list, and six
+ * round-trips to render six rows is six chances for it to render half-empty.
+ */
+export interface OrderPersonRow {
+  role_key: string;
+  role_label: string;
+  person: string;
+  detail: string | null;
+  at: string | null;
+}
+
+export async function getOrderPeople(orderId: string): Promise<OrderPersonRow[]> {
+  const { data, error } = await supabase.rpc('fm_order_people', { p_order_id: orderId });
+  if (error) throw error;
+  return (data ?? []) as OrderPersonRow[];
+}
+
+/**
+ * The granular status board (0090) — Floor Manager and Owner only.
+ *
+ * Two reads of ONE derivation. Both are computed from `repeats.current_status`
+ * and `current_stage_index` against the order's own `order_stages`; neither
+ * records anything, and there is no second place a piece's position is stored.
+ *
+ * The role restriction is enforced by the RPCs themselves, not here — a screen
+ * nobody else has a route to is not an access control.
+ */
+export interface OrderStatusRow {
+  step_key: string;
+  label: string;
+  /** `milestone` rows are order-wide and read done/current/ahead; `stage` rows carry a count. */
+  kind: 'milestone' | 'stage';
+  state: 'done' | 'current' | 'ahead';
+  /** How many of the order's repeats sit at exactly this status right now. */
+  count: number | null;
+  at: string | null;
+  /** Storage path — the caller resolves a signed URL, as everywhere else. */
+  photo_url: string | null;
+}
+
+export interface RepeatStatusRow {
+  repeat_id: string;
+  repeat_code: string;
+  status_key: string;
+  status_label: string;
+  /** The underlying `repeats.current_status` this label was derived from. */
+  raw_status: string;
+  stage_index: number | null;
+  sequence: number | null;
+  at: string | null;
+  photo_url: string | null;
+  sla_breached: boolean;
+  partner_name: string | null;
+}
+
+export async function getOrderStatusBoard(orderId: string): Promise<OrderStatusRow[]> {
+  const { data, error } = await supabase.rpc('fm_order_status_board', { p_order_id: orderId });
+  if (error) throw error;
+  return (data ?? []) as OrderStatusRow[];
+}
+
+export async function getRepeatStatusBoard(orderId: string): Promise<RepeatStatusRow[]> {
+  const { data, error } = await supabase.rpc('fm_repeat_status_board', { p_order_id: orderId });
+  if (error) throw error;
+  return (data ?? []) as RepeatStatusRow[];
+}
+
 export async function getColorRequirements(orderId: string): Promise<ColorRequirement[]> {
   const { data, error } = await supabase.rpc('order_color_requirements', {
     p_order_id: orderId,
@@ -453,6 +524,14 @@ export async function getColorRequirements(orderId: string): Promise<ColorRequir
   return (data ?? []) as ColorRequirement[];
 }
 
+/**
+ * The old "Ask for material" press. It has no caller: 0088 folded the material
+ * request into `fm_mark_vendor_informed`, so Client Approved does it.
+ *
+ * Kept because `fm_ask_for_material` is still the only way to request material
+ * for a job card confirmed BEFORE 0088 whose backfill somehow missed it —
+ * pressing Client Approved on such a card is refused as a no-op.
+ */
 export async function askForMaterial(orderId: string): Promise<JobCard> {
   const { data, error } = await supabase.rpc('fm_ask_for_material', { p_order_id: orderId });
   if (error) throw error;
@@ -624,6 +703,23 @@ export async function listHandoverOrders(): Promise<HandoverOrderRow[]> {
   const { data, error } = await supabase.rpc('ot_handover_orders');
   if (error) throw error;
   return (data ?? []) as HandoverOrderRow[];
+}
+
+/**
+ * How many repeats sit at these statuses, factory-wide.
+ *
+ * A HEAD request with an exact count — no rows come back, so a dashboard card
+ * costs one cheap query rather than pulling every repeat in the factory to call
+ * `.length` on it. RLS scopes it to the caller's own factory.
+ */
+export async function countRepeatsByStatus(statuses: string[]): Promise<number> {
+  if (!statuses.length) return 0;
+  const { count, error } = await supabase
+    .from('repeats')
+    .select('id', { count: 'exact', head: true })
+    .in('current_status', statuses);
+  if (error) throw error;
+  return count ?? 0;
 }
 
 /** Count of orders visible to the caller — for the dashboard card. */

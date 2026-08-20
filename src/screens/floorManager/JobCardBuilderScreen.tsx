@@ -1,16 +1,31 @@
 /**
- * Floor Manager: Job Card Builder (Stage 3).
+ * Floor Manager: Job Card Builder — step 1 of 2.
  *
- * Top-to-bottom: design-sheet photo → design details (design code, stitches
- * per repeat, auto-computed total) → stage sequence → a read-only preview of
- * the generated needle/colour lines. "Continue to review" saves everything
- * and hands off to JobCardReviewScreen, where the needle/colour mapping
- * actually becomes editable — this screen never edits a line directly.
+ * Design sheet photo, then the stage sequence, then generate the needle lines
+ * and hand off to `JobCardReviewScreen` where they are corrected AND the design
+ * details are captured.
  *
- * Generation only runs once (when no lines exist yet) so re-entering this
- * screen after Review edits never silently wipes a corrected mapping. If the
- * underlying sheets change later, "Regenerate lines" on the job card detail
- * screen is the deliberate, explicit escape hatch for that.
+ * WHAT MOVED, AND WHY
+ * -------------------
+ * Design details (design code, stitches per repeat) used to be here, ABOVE the
+ * stage sequence, with the needle/colour work two screens later. They are now
+ * LAST, after the needles — which is the order the brief asks for and also the
+ * order the numbers actually depend on: "stitches per repeat" is the sum of what
+ * each needle sews, so entering it before the needles exist is guessing at a
+ * figure the next screen can derive.
+ *
+ * THE STAGE SEQUENCE IS A FIXED SET, NOT A LIST YOU BUILD
+ * ------------------------------------------------------
+ * Four stages, always in this order. Embroidery and Clipping are mandatory and
+ * cannot be turned off; Press and Piko are optional. There is no "+ Add stage"
+ * dropdown and no selection-order rule, because the sequence embroidery ->
+ * clipping -> press -> piko is the process, not a preference.
+ *
+ * HANDLED-BY AND SLA ARE NO LONGER ASKED FOR. `fm_set_stage_sequence` still
+ * takes them, so the defaults are applied here (see STAGE_DEFAULTS): the first
+ * stage runs in-house on the factory's own machines, every later one is a
+ * finishing partner's, and the SLA is 24h. The partner itself stays unset —
+ * it is chosen per piece at hand-over time (0084), not per order up front.
  */
 import React, { useEffect, useState } from 'react';
 import { View, Text, ScrollView, StyleSheet, Pressable, ActivityIndicator } from 'react-native';
@@ -19,8 +34,6 @@ import { Ionicons } from '@expo/vector-icons';
 import { useNavigation, useRoute } from '@react-navigation/native';
 import { Screen } from '../../components/ui/Screen';
 import { AppButton } from '../../components/ui/AppButton';
-import { TextField } from '../../components/forms/TextField';
-import { SelectField } from '../../components/forms/SelectField';
 import { PhotoPicker, type LocalPhoto } from '../../components/camera/PhotoPicker';
 import { OrderStatusPill } from '../../components/ui/StatusPill';
 import {
@@ -31,9 +44,7 @@ import {
   setStageSequence,
   generateJobCard,
   updateOrderPhotos,
-  saveJobCardDesign,
 } from '../../api/endpoints/orders';
-import { listMasters } from '../../api/endpoints/masters';
 import { uploadOrderPhoto } from '../../api/endpoints/storage';
 import { useAuth } from '../../auth/AuthContext';
 import { describeDbError } from '../../utils/errors';
@@ -41,19 +52,26 @@ import type { StageInput } from '../../models/orderTypes';
 import type { StageType } from '../../models/types';
 import { colors, spacing, radius, fontSize, fontWeight, fontFamily } from '../../constants/theme';
 
-const ALL_STAGES: { type: StageType; label: string }[] = [
-  { type: 'embroidery', label: 'Embroidery' },
-  { type: 'clipping', label: 'Clipping' },
-  { type: 'press', label: 'Press' },
-  { type: 'piko', label: 'Piko' },
+/** The four stages, in process order. `locked` ones cannot be turned off. */
+const ALL_STAGES: { type: StageType; label: string; locked: boolean }[] = [
+  { type: 'embroidery', label: 'Embroidery', locked: true },
+  { type: 'clipping', label: 'Clipping', locked: true },
+  { type: 'press', label: 'Press', locked: false },
+  { type: 'piko', label: 'Piko', locked: false },
 ];
 
-interface StageDraft {
-  stage_type: StageType;
-  is_outsourced: boolean;
-  sla_hours: string;
-  partner_id: string | null;
-}
+const MANDATORY: StageType[] = ALL_STAGES.filter((s) => s.locked).map((s) => s.type);
+
+/**
+ * What the builder no longer asks for.
+ *
+ * Matches how the floor actually runs (0084): stage 1 is embroidery on the
+ * factory's own machines, everything after it goes out to a finishing partner
+ * via the delivery person. `partner_id` is deliberately null — `fm_hand_over_stage`
+ * names the partner per piece when the work is actually released, and choosing
+ * one here would fix a routing decision weeks before it is made.
+ */
+const STAGE_DEFAULTS = { slaHours: 24 };
 
 export function JobCardBuilderScreen() {
   const route = useRoute<any>();
@@ -63,10 +81,7 @@ export function JobCardBuilderScreen() {
   const orderId: string = route.params?.orderId;
 
   const [designPhoto, setDesignPhoto] = useState<LocalPhoto[]>([]);
-  const [designCode, setDesignCode] = useState('');
-  const [stitchesPerRepeat, setStitchesPerRepeat] = useState('');
-  const [stages, setStages] = useState<StageDraft[]>([]);
-  const [addingStage, setAddingStage] = useState(false);
+  const [selected, setSelected] = useState<StageType[]>(MANDATORY);
   const [error, setError] = useState<string | null>(null);
   const [seeded, setSeeded] = useState(false);
 
@@ -86,31 +101,18 @@ export function JobCardBuilderScreen() {
     queryKey: ['jobCard', orderId],
     queryFn: () => getJobCard(orderId),
   });
-  const { data: partners } = useQuery({
-    queryKey: ['masters', 'finishing_partners', '', false],
-    queryFn: () => listMasters({ table: 'finishing_partners', searchField: 'name' }),
-  });
 
-  // Seed from whatever already exists (revisiting the builder after Review, etc).
+  // Seed from whatever already exists (revisiting the builder after Review).
+  // The two mandatory stages are always on, even if an older order was saved
+  // without one — the set is not a record of what was chosen, it is the process.
   useEffect(() => {
-    if (seeded) return;
-    if (existingStages === undefined || jobCard === undefined) return;
+    if (seeded || existingStages === undefined) return;
     if (existingStages.length) {
-      setStages(
-        existingStages.map((s) => ({
-          stage_type: s.stage_type,
-          is_outsourced: s.is_outsourced,
-          sla_hours: String(s.sla_hours),
-          partner_id: s.partner_id,
-        }))
-      );
-    }
-    if (jobCard.card?.design_code) setDesignCode(jobCard.card.design_code);
-    if (jobCard.card?.stitches_per_repeat) {
-      setStitchesPerRepeat(String(jobCard.card.stitches_per_repeat));
+      const chosen = existingStages.map((s) => s.stage_type as StageType);
+      setSelected(ALL_STAGES.map((s) => s.type).filter((t) => chosen.includes(t) || MANDATORY.includes(t)));
     }
     setSeeded(true);
-  }, [existingStages, jobCard, seeded]);
+  }, [existingStages, seeded]);
 
   const continueMutation = useMutation({
     mutationFn: async () => {
@@ -118,14 +120,20 @@ export function JobCardBuilderScreen() {
         const path = await uploadOrderPhoto(profile.factory_id, orderId, designPhoto[0].uri, 'design');
         await updateOrderPhotos(orderId, order?.cloth_photos ?? [], path);
       }
-      await saveJobCardDesign(orderId, designCode.trim(), parseFloat(stitchesPerRepeat));
-      const payload: StageInput[] = stages.map((s) => ({
-        stage_type: s.stage_type,
-        is_outsourced: s.is_outsourced,
-        sla_hours: parseInt(s.sla_hours, 10) || 24,
-        partner_id: s.is_outsourced ? s.partner_id : null,
-      }));
+
+      // Always sent in ALL_STAGES order, whatever order the chips were tapped.
+      const payload: StageInput[] = ALL_STAGES.filter((s) => selected.includes(s.type)).map(
+        (s, i) => ({
+          stage_type: s.type,
+          is_outsourced: i > 0,
+          sla_hours: STAGE_DEFAULTS.slaHours,
+          partner_id: null,
+        })
+      );
       await setStageSequence(orderId, payload);
+
+      // Only when there is nothing to lose: re-entering the builder after
+      // correcting a mapping on Review must not silently wipe the correction.
       if (!jobCard?.lines?.length) {
         await generateJobCard(orderId);
       }
@@ -140,35 +148,24 @@ export function JobCardBuilderScreen() {
     onError: (e: unknown) => setError(describeDbError(e, 'Job card')),
   });
 
-  function addStage(type: StageType) {
-    setStages((prev) => [...prev, { stage_type: type, is_outsourced: false, sla_hours: '24', partner_id: null }]);
-    setAddingStage(false);
-  }
-  function removeStage(type: StageType) {
-    setStages((prev) => prev.filter((s) => s.stage_type !== type));
-  }
-  function patch(i: number, p: Partial<StageDraft>) {
-    setStages((prev) => prev.map((s, idx) => (idx === i ? { ...s, ...p } : s)));
+  function toggle(type: StageType) {
+    if (MANDATORY.includes(type)) return;
+    setSelected((prev) =>
+      prev.includes(type) ? prev.filter((t) => t !== type) : [...prev, type]
+    );
   }
 
   if (isLoading || !order) {
     return (
       <Screen>
-        <ActivityIndicator color={colors.indigo} style={{ marginTop: spacing.xl }} />
+        <ActivityIndicator color={colors.primary} style={{ marginTop: spacing.xl }} />
       </Screen>
     );
   }
 
-  // The order's total planned repeat count (from the sheets captured at order
-  // time), not merely how many have been QA-coded so far — those can lag
-  // behind on orders with rejected/returned pieces, which would otherwise make
-  // this understate (or blank out) the total.
   const repeatCount = (sheets ?? []).reduce((sum, s) => sum + (s.repeats_count ?? 0), 0);
-  const stitchesValue = parseFloat(stitchesPerRepeat);
-  const totalStitches = !isNaN(stitchesValue) && repeatCount ? Math.round(stitchesValue * repeatCount) : null;
-  const lines = jobCard?.lines ?? [];
-  const availableStages = ALL_STAGES.filter((s) => !stages.some((x) => x.stage_type === s.type));
   const busy = continueMutation.isPending;
+  const ordered = ALL_STAGES.filter((s) => selected.includes(s.type));
 
   return (
     <Screen padded={false}>
@@ -177,7 +174,9 @@ export function JobCardBuilderScreen() {
           <Text style={styles.code}>{order.order_code}</Text>
           <OrderStatusPill status={order.status} />
         </View>
-        <Text style={styles.vendor}>{order.vendors?.name}</Text>
+        <Text style={styles.vendor}>
+          {order.vendors?.name} · {repeatCount} repeat{repeatCount === 1 ? '' : 's'}
+        </Text>
 
         <PhotoPicker
           label="Design sheet"
@@ -192,166 +191,57 @@ export function JobCardBuilderScreen() {
           retakeLabel="↻ Retake photo"
         />
 
-        <Section title="Design details">
-          <View style={styles.row}>
-            <View style={styles.rowField}>
-              <TextField
-                label="Design code"
-                value={designCode}
-                onChangeText={setDesignCode}
-                placeholder="e.g. DS-4785"
-                required
-                mono
-              />
-            </View>
-            <View style={styles.rowField}>
-              <NumberStepperField
-                label="Stitches per repeat"
-                value={stitchesPerRepeat}
-                onChangeText={setStitchesPerRepeat}
-                required
-              />
-            </View>
-            <View style={styles.rowField}>
-              <Text style={styles.label}>Total stitches</Text>
-              <View style={styles.totalBox}>
-                <Text style={styles.totalValue}>
-                  {totalStitches !== null ? totalStitches.toLocaleString() : '—'}
-                </Text>
-              </View>
-              <Text style={styles.totalRepeats}>{repeatCount} repeats</Text>
-            </View>
-          </View>
-        </Section>
-
         <Section title="Stage sequence">
-          <Text style={styles.label}>
-            Stage sequence<Text style={styles.req}> *</Text>
-          </Text>
-          <View style={styles.tagRow}>
-            {stages.map((s) => (
-              <View key={s.stage_type} style={styles.tag}>
-                <Text style={styles.tagText}>{ALL_STAGES.find((a) => a.type === s.stage_type)?.label ?? s.stage_type}</Text>
-                <Pressable
-                  onPress={() => removeStage(s.stage_type)}
-                  accessibilityRole="button"
-                  accessibilityLabel={`Remove ${s.stage_type}`}
-                  hitSlop={6}
-                >
-                  <Ionicons name="close" size={14} color={colors.indigoDeep} />
-                </Pressable>
-              </View>
-            ))}
-            {availableStages.length ? (
-              <Pressable
-                onPress={() => setAddingStage((v) => !v)}
-                accessibilityRole="button"
-                style={({ pressed }) => [styles.addTag, pressed && styles.pressed]}
-              >
-                <Text style={styles.addTagText}>+ Add stage</Text>
-                <Ionicons name={addingStage ? 'chevron-up' : 'chevron-down'} size={14} color={colors.indigo} />
-              </Pressable>
-            ) : null}
-          </View>
-          <Text style={styles.help}>Selection order becomes the processing sequence.</Text>
-
-          {addingStage ? (
-            <View style={styles.addOptions}>
-              {availableStages.map((s) => (
+          <View style={styles.stageGrid}>
+            {ALL_STAGES.map((s) => {
+              const on = selected.includes(s.type);
+              return (
                 <Pressable
                   key={s.type}
-                  onPress={() => addStage(s.type)}
-                  style={({ pressed }) => [styles.addOption, pressed && styles.pressed]}
+                  onPress={() => toggle(s.type)}
+                  disabled={s.locked}
+                  accessibilityRole="checkbox"
+                  accessibilityState={{ checked: on, disabled: s.locked }}
+                  accessibilityLabel={
+                    s.locked ? `${s.label} — always included` : `${s.label} — optional`
+                  }
+                  style={({ pressed }) => [
+                    styles.stageChip,
+                    on && styles.stageChipOn,
+                    s.locked && styles.stageChipLocked,
+                    pressed && !s.locked && styles.pressed,
+                  ]}
                 >
-                  <Text style={styles.addOptionText}>{s.label}</Text>
-                </Pressable>
-              ))}
-            </View>
-          ) : null}
-
-          {stages.map((s, i) => (
-            <View key={s.stage_type} style={styles.stageCard}>
-              <Text style={styles.stageCardTitle}>
-                {i + 1}. {s.stage_type}
-              </Text>
-              <SelectField
-                label="Handled by"
-                value={s.is_outsourced ? 'out' : 'in'}
-                options={[
-                  { value: 'in', label: 'In-house' },
-                  { value: 'out', label: 'Outsourced' },
-                ]}
-                onChange={(v) => patch(i, { is_outsourced: v === 'out', partner_id: null })}
-              />
-              {s.is_outsourced ? (
-                <SelectField
-                  label="Finishing partner"
-                  value={s.partner_id}
-                  options={(partners ?? []).map((p: any) => ({
-                    value: p.id,
-                    label: `${p.name} (${String(p.stage_type)})`,
-                  }))}
-                  onChange={(v) => patch(i, { partner_id: v })}
-                  allowClear
-                  clearLabel="Decide later"
-                  emptyHint="No finishing partners on file yet."
-                />
-              ) : null}
-              <TextField
-                label="SLA (hours)"
-                value={s.sla_hours}
-                onChangeText={(v) => patch(i, { sla_hours: v })}
-                numeric
-                mono
-                placeholder="24"
-              />
-            </View>
-          ))}
-        </Section>
-
-        <Section title="Needle & color lines">
-          <Text style={styles.help}>
-            Generated from the order's thread colours, numbered in order and capped at 6 — the most
-            needles on any of your machines. You can correct, add or remove lines on the next screen.
-          </Text>
-          {lines.length ? (
-            <View style={styles.table}>
-              {lines
-                .slice()
-                .sort((a, b) => a.needle_number - b.needle_number)
-                .map((l) => (
-                  <View key={l.id} style={styles.previewRow}>
-                    <Text style={[styles.previewNeedle, styles.mono]}>Needle {l.needle_number}</Text>
-                    <Text style={[styles.previewColor, styles.mono]}>{l.thread_color_code}</Text>
+                  <View style={[styles.box, on && styles.boxOn]}>
+                    {on ? <Ionicons name="checkmark" size={14} color={colors.white} /> : null}
                   </View>
-                ))}
-            </View>
-          ) : (
-            <Text style={styles.help}>
-              Nothing generated yet — continue to see the lines and adjust them.
-            </Text>
-          )}
+                  <Text style={[styles.stageLabel, on && styles.stageLabelOn]}>{s.label}</Text>
+                  {s.locked ? (
+                    <Ionicons
+                      name="lock-closed"
+                      size={12}
+                      color={on ? colors.white : colors.inkSubtle}
+                    />
+                  ) : null}
+                </Pressable>
+              );
+            })}
+          </View>
+
+          {/* The resulting sequence, as one line. Not a rule to read — a
+              confirmation of what was just picked. */}
+          <Text style={styles.sequenceLine}>
+            {ordered.map((s) => s.label).join('  →  ')}
+          </Text>
+          <Text style={styles.help}>Embroidery and Clipping are always included.</Text>
         </Section>
 
         {error ? <Text style={styles.error}>{error}</Text> : null}
 
         <AppButton
-          title="Continue to review"
+          title="Continue to needles & colours"
           onPress={() => {
             setError(null);
-            if (!designCode.trim()) {
-              setError('A design code is required.');
-              return;
-            }
-            const n = parseFloat(stitchesPerRepeat);
-            if (!n || n <= 0) {
-              setError('Stitches per repeat must be a positive number.');
-              return;
-            }
-            if (!stages.length) {
-              setError('Pick at least one stage.');
-              return;
-            }
             continueMutation.mutate();
           }}
           loading={busy}
@@ -371,152 +261,75 @@ function Section({ title, children }: { title: string; children: React.ReactNode
   );
 }
 
-function NumberStepperField({
-  label,
-  value,
-  onChangeText,
-  required,
-}: {
-  label: string;
-  value: string;
-  onChangeText: (v: string) => void;
-  required?: boolean;
-}) {
-  function step(delta: number) {
-    const current = parseInt(value, 10) || 0;
-    const next = Math.max(0, current + delta);
-    onChangeText(String(next));
-  }
-  return (
-    <View style={styles.stepperWrap}>
-      <Text style={styles.label}>
-        {label}
-        {required ? <Text style={styles.req}> *</Text> : null}
-      </Text>
-      <View style={styles.stepperField}>
-        <TextField label="" value={value} onChangeText={onChangeText} numeric mono placeholder="0" />
-        <View style={styles.stepperBtns}>
-          <Pressable onPress={() => step(1)} accessibilityRole="button" hitSlop={4} style={styles.stepperBtn}>
-            <Ionicons name="chevron-up" size={14} color={colors.indigo} />
-          </Pressable>
-          <Pressable onPress={() => step(-1)} accessibilityRole="button" hitSlop={4} style={styles.stepperBtn}>
-            <Ionicons name="chevron-down" size={14} color={colors.indigo} />
-          </Pressable>
-        </View>
-      </View>
-    </View>
-  );
-}
-
 const styles = StyleSheet.create({
   content: { padding: spacing.xl },
-  head: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: spacing.sm },
-  code: { fontFamily: fontFamily.mono, fontSize: fontSize.title, color: colors.indigoDeep, fontWeight: fontWeight.semibold },
-  vendor: { marginTop: spacing.xs, marginBottom: spacing.lg, fontSize: fontSize.body, color: colors.indigoDeep },
+  head: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: spacing.sm,
+  },
+  code: {
+    fontFamily: fontFamily.mono,
+    fontSize: fontSize.title,
+    color: colors.ink,
+    fontWeight: fontWeight.semibold,
+  },
+  vendor: {
+    marginTop: spacing.xs,
+    marginBottom: spacing.lg,
+    fontSize: fontSize.body,
+    color: colors.ink,
+  },
   section: { marginBottom: spacing.xl },
   sectionTitle: {
     fontSize: fontSize.caption,
     fontWeight: fontWeight.medium,
-    color: colors.slate,
+    color: colors.inkMuted,
     textTransform: 'uppercase',
     letterSpacing: 0.5,
     marginBottom: spacing.sm,
   },
-  help: { fontSize: fontSize.secondary, color: colors.slate, marginBottom: spacing.md, lineHeight: 20 },
-  label: { fontSize: fontSize.secondary, fontWeight: fontWeight.medium, color: colors.indigoDeep, marginBottom: spacing.sm },
-  req: { color: colors.alert },
-  row: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.md, marginBottom: spacing.lg },
-  rowField: { flex: 1, minWidth: 140 },
-  totalBox: {
+  stageGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm },
+  stageChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
     minHeight: 48,
-    justifyContent: 'center',
+    paddingHorizontal: spacing.lg,
+    borderRadius: radius.md,
     borderWidth: 1,
     borderColor: colors.border,
-    borderRadius: radius.md,
-    backgroundColor: colors.canvas,
-    paddingHorizontal: spacing.md,
+    backgroundColor: colors.surface,
   },
-  totalRepeats: { marginTop: spacing.xs, fontSize: fontSize.caption, color: colors.slate },
-  totalValue: { fontSize: fontSize.body, fontFamily: fontFamily.mono, color: colors.slate },
-  stepperWrap: { marginBottom: 0 },
-  stepperField: { flexDirection: 'row', alignItems: 'flex-start', gap: spacing.xs },
-  stepperBtns: { marginTop: spacing.xs, gap: 2 },
-  stepperBtn: {
-    width: 28,
-    height: 22,
-    borderRadius: radius.sm,
+  stageChipOn: { backgroundColor: colors.primary, borderColor: colors.primary },
+  stageChipLocked: { opacity: 0.95 },
+  pressed: { opacity: 0.8 },
+  box: {
+    width: 20,
+    height: 20,
+    borderRadius: 6,
     borderWidth: 1,
     borderColor: colors.border,
     alignItems: 'center',
     justifyContent: 'center',
+    backgroundColor: colors.white,
   },
-  tagRow: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm, marginBottom: spacing.sm },
-  tag: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: spacing.xs,
-    minHeight: 36,
-    paddingHorizontal: spacing.md,
-    borderRadius: radius.pill,
-    backgroundColor: colors.canvas,
-    borderWidth: 1,
-    borderColor: colors.border,
-  },
-  tagText: { fontSize: fontSize.secondary, color: colors.indigoDeep, fontWeight: fontWeight.medium },
-  addTag: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: spacing.xs,
-    minHeight: 36,
-    paddingHorizontal: spacing.md,
-    borderRadius: radius.pill,
-    borderWidth: 1,
-    borderColor: colors.indigo,
-  },
-  addTagText: { fontSize: fontSize.secondary, color: colors.indigo, fontWeight: fontWeight.medium },
-  addOptions: {
-    borderWidth: 1,
-    borderColor: colors.border,
-    borderRadius: radius.md,
-    backgroundColor: colors.surface,
-    marginBottom: spacing.md,
-    overflow: 'hidden',
-  },
-  addOption: { paddingVertical: spacing.sm, paddingHorizontal: spacing.md },
-  addOptionText: { fontSize: fontSize.secondary, color: colors.indigoDeep },
-  stageCard: {
-    borderWidth: 1,
-    borderColor: colors.border,
-    borderRadius: radius.lg,
-    backgroundColor: colors.surface,
-    padding: spacing.lg,
-    marginBottom: spacing.md,
-  },
-  stageCardTitle: {
+  boxOn: { backgroundColor: colors.primaryDeep, borderColor: colors.primaryDeep },
+  stageLabel: {
+    fontFamily: fontFamily.sansMedium,
     fontSize: fontSize.secondary,
-    fontWeight: fontWeight.semibold,
-    color: colors.indigoDeep,
-    textTransform: 'capitalize',
-    marginBottom: spacing.md,
+    fontWeight: fontWeight.medium,
+    color: colors.ink,
   },
-  table: {
-    borderWidth: 1,
-    borderColor: colors.border,
-    borderRadius: radius.md,
-    overflow: 'hidden',
-    backgroundColor: colors.canvas,
+  stageLabelOn: { color: colors.white, fontWeight: fontWeight.semibold },
+  sequenceLine: {
+    marginTop: spacing.md,
+    fontFamily: fontFamily.sansMedium,
+    fontSize: fontSize.body,
+    fontWeight: fontWeight.medium,
+    color: colors.ink,
   },
-  previewRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    paddingVertical: spacing.sm,
-    paddingHorizontal: spacing.md,
-    borderTopWidth: 1,
-    borderTopColor: colors.border,
-  },
-  previewNeedle: { fontSize: fontSize.secondary, color: colors.slate },
-  previewColor: { fontSize: fontSize.secondary, color: colors.slate },
-  mono: { fontFamily: fontFamily.mono },
-  error: { color: colors.alert, fontSize: fontSize.secondary, marginBottom: spacing.sm },
-  pressed: { opacity: 0.75 },
+  help: { marginTop: spacing.xs, fontSize: fontSize.caption, color: colors.inkMuted, lineHeight: 18 },
+  error: { marginBottom: spacing.md, fontSize: fontSize.secondary, color: colors.alert },
 });

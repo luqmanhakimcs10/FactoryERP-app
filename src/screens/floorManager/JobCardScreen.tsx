@@ -49,7 +49,6 @@ import {
   getOrderTimeline,
   generateJobCard,
   markVendorInformed,
-  askForMaterial,
   getColorRequirements,
 } from '../../api/endpoints/orders';
 import { describeDbError } from '../../utils/errors';
@@ -110,12 +109,43 @@ export function JobCardScreen() {
     queryKey: ['timeline', orderId],
     queryFn: () => getOrderTimeline(orderId),
   });
+  // Per-colour requirement from the real per-needle counts (0082).
+  //
+  // ABOVE the loading early-return, with every other hook. It used to sit below
+  // it, which is a hooks-order violation: the first render bails out before
+  // reaching it and the next one calls one hook more, so React tears the screen
+  // down with "rendered more hooks than during the previous render".
+  const { data: colorReqData } = useQuery({
+    queryKey: ['colorRequirements', orderId],
+    queryFn: () => getColorRequirements(orderId),
+    enabled: !!orderId,
+  });
 
   function invalidateAll() {
     for (const k of ['order', 'orderStages', 'jobCard', 'timeline', 'repeats']) {
       queryClient.invalidateQueries({ queryKey: [k, orderId] });
     }
     queryClient.invalidateQueries({ queryKey: ['orders'] });
+  }
+
+  /**
+   * Download and Share are the SAME operation: render the PDF, hand it to the
+   * OS share sheet. That sheet already lists WhatsApp on both platforms, and is
+   * reliable where a `whatsapp://` deep link is not — that scheme fails silently
+   * when WhatsApp is not installed. The two buttons differ only in what they
+   * promise, which is what the floor manager is looking for.
+   */
+  async function exportCard(kind: 'download' | 'whatsapp') {
+    if (!card) return;
+    setError(null);
+    setExporting(kind);
+    try {
+      await shareJobCardPdf(order!, card, lines, existingStages ?? [], repeatCount);
+    } catch (e) {
+      setError(describeDbError(e, 'Job card'));
+    } finally {
+      setExporting(null);
+    }
   }
 
   const generateMutation = useMutation({
@@ -136,14 +166,10 @@ export function JobCardScreen() {
     onError: (e) => setError(describeDbError(e, 'Job card')),
   });
 
-  const askForMaterialMutation = useMutation({
-    mutationFn: () => askForMaterial(orderId),
-    onSuccess: () => {
-      invalidateAll();
-      showNextStep(NEXT_STEP.materialRequested);
-    },
-    onError: (e) => setError(describeDbError(e, 'Job card')),
-  });
+  // `askForMaterialMutation` was here. "Ask for material" was a second press
+  // for a decision already made: 0088 folded the material request into
+  // `fm_mark_vendor_informed`, so approving the card is what releases it to the
+  // store manager.
 
   if (isLoading || !order) {
     return (
@@ -159,20 +185,13 @@ export function JobCardScreen() {
   // Total planned repeats (from sheets), not just how many have been coded so
   // far — matches the same total-stitches basis used on the Job Card Builder.
   const repeatCount = (sheets ?? []).reduce((sum, s) => sum + (s.repeats_count ?? 0), 0);
-  // Per-colour requirement from the real per-needle counts (0082). Empty until
-  // needle lines exist, which is why it renders conditionally rather than
-  // showing a table of zeroes.
-  const { data: colorReqData } = useQuery({
-    queryKey: ['colorRequirements', orderId],
-    queryFn: () => getColorRequirements(orderId),
-    enabled: !!orderId,
-  });
+  // Empty until needle lines exist, which is why the table renders
+  // conditionally rather than showing a row of zeroes.
   const colorReq = colorReqData ?? [];
 
   const totalStitches =
     card?.stitches_per_repeat && repeatCount ? Math.round(card.stitches_per_repeat * repeatCount) : null;
-  const busy =
-    generateMutation.isPending || vendorInformedMutation.isPending || askForMaterialMutation.isPending;
+  const busy = generateMutation.isPending || vendorInformedMutation.isPending;
 
   return (
     <Screen padded={false}>
@@ -182,32 +201,107 @@ export function JobCardScreen() {
           <OrderStatusPill status={order.status} />
         </View>
         <Text style={styles.vendor}>{order.vendors?.name}</Text>
+        {/* Repeats only, and counted properly. The sheet count sat beside this
+            and is gone with the rest of the sheet copy — it is not a quantity
+            the floor manager ordered or can act on. */}
         <Text style={styles.meta}>
-          <Text style={styles.mono}>{repeats?.length ?? 0}</Text> coded repeats ·{' '}
-          {sheets?.length ?? 0} sheets
+          <Text style={styles.mono}>{repeats?.length ?? 0}</Text> of{' '}
+          <Text style={styles.mono}>{repeatCount}</Text> repeat
+          {repeatCount === 1 ? '' : 's'} coded
         </Text>
+
+        {/* ---- The four actions, before anything that needs scrolling ----
+            These are what the floor manager opens this screen to press. They
+            used to sit below the needle table and the colour requirement, far
+            enough down that "Client informed" was regularly missed. */}
+        {lines.length || card ? (
+          <View style={styles.actionBar}>
+            {!isConfirmed ? (
+              <AppButton
+                title={card ? 'Regenerate' : 'Generate'}
+                variant="secondary"
+                size="sm"
+                icon="refresh-outline"
+                onPress={() => {
+                  setError(null);
+                  generateMutation.mutate();
+                }}
+                loading={generateMutation.isPending}
+                disabled={busy}
+                style={styles.actionBtn}
+              />
+            ) : null}
+
+            {lines.length && card ? (
+              <>
+                <AppButton
+                  title="Download"
+                  variant="secondary"
+                  size="sm"
+                  icon="download-outline"
+                  loading={exporting === 'download'}
+                  disabled={!!exporting}
+                  style={styles.actionBtn}
+                  onPress={() => exportCard('download')}
+                />
+                <AppButton
+                  title="Share on WhatsApp"
+                  variant="secondary"
+                  size="sm"
+                  icon="logo-whatsapp"
+                  loading={exporting === 'whatsapp'}
+                  disabled={!!exporting}
+                  style={styles.actionBtn}
+                  onPress={() => exportCard('whatsapp')}
+                />
+              </>
+            ) : null}
+
+            {card ? (
+              <AppButton
+                title={card.vendor_informed_at ? 'Client Approved ✓' : 'Client Approved'}
+                size="sm"
+                icon="checkmark-done-outline"
+                onPress={() =>
+                  card.vendor_informed_at
+                    ? undefined
+                    : confirmAction(
+                        'Client Approved',
+                        'This locks the needle mapping, moves every repeat to ready-for-production, and asks the store manager for the material.',
+                        () => {
+                          setError(null);
+                          vendorInformedMutation.mutate();
+                        }
+                      )
+                }
+                loading={vendorInformedMutation.isPending}
+                disabled={busy || !!card.vendor_informed_at}
+                style={styles.actionBtn}
+              />
+            ) : null}
+          </View>
+        ) : null}
+
+        {error ? <Text style={styles.error}>{error}</Text> : null}
 
         <View style={styles.stitch}>
           <StitchLine />
         </View>
 
         {/* ---- 1. Stage sequence ----
-            Set upstream on JobCardBuilderScreen; this is read-only recap. */}
+            One line, arrow-connected. It was four stacked cards carrying a
+            sequence number and an SLA each — a fifth of the screen spent
+            restating a fixed four-step process nobody can change from here. */}
         <Section title="1 · Stage sequence">
           {(existingStages ?? []).length ? (
             <View>
-              {(existingStages ?? []).map((s) => (
-                <View key={s.id} style={styles.card}>
-                  <Text style={styles.cardTitle}>
-                    {s.sequence}. {s.stage_type}
-                    {s.is_outsourced ? ' (outsourced)' : ''}
-                  </Text>
-                  <Text style={styles.cardLine}>
-                    SLA <Text style={styles.mono}>{s.sla_hours}</Text>h
-                    {s.finishing_partners ? ` · ${s.finishing_partners.name}` : ''}
-                  </Text>
-                </View>
-              ))}
+              <Text style={styles.sequenceLine}>
+                {(existingStages ?? [])
+                  .slice()
+                  .sort((a, b) => a.sequence - b.sequence)
+                  .map((s) => s.stage_type.replace(/_/g, ' '))
+                  .join('  →  ')}
+              </Text>
               {isConfirmed ? (
                 <Text style={styles.lockedNote}>Locked — the job card is confirmed.</Text>
               ) : null}
@@ -316,141 +410,26 @@ export function JobCardScreen() {
                 </View>
               ) : null}
 
-              {!isConfirmed ? (
-                <AppButton
-                  title={card ? 'Regenerate job card' : 'Generate job card'}
-                  variant={card ? 'secondary' : 'primary'}
-                  onPress={() => {
-                    setError(null);
-                    generateMutation.mutate();
-                  }}
-                  loading={generateMutation.isPending}
-                  disabled={busy}
-                />
-              ) : null}
-
-              {/* Download / share the finished job card. */}
-              {lines.length ? (
-                <View style={styles.actions}>
-                  <AppButton
-                    title="Download job card"
-                    variant="secondary"
-                    loading={exporting === 'download'}
-                    disabled={!!exporting}
-                    style={{ flex: 1 }}
-                    onPress={async () => {
-                      if (!card) return;
-                      setError(null);
-                      setExporting('download');
-                      try {
-                        await shareJobCardPdf(order, card, lines, existingStages ?? [], repeatCount);
-                      } catch (e) {
-                        setError(describeDbError(e, 'Job card'));
-                      } finally {
-                        setExporting(null);
-                      }
-                    }}
-                  />
-                  <AppButton
-                    title="Share on WhatsApp"
-                    variant="secondary"
-                    loading={exporting === 'whatsapp'}
-                    disabled={!!exporting}
-                    style={{ flex: 1 }}
-                    onPress={async () => {
-                      if (!card) return;
-                      setError(null);
-                      setExporting('whatsapp');
-                      try {
-                        // Same OS share sheet as Download — it already lists WhatsApp
-                        // as a target, and is reliable where a whatsapp:// deep link
-                        // is not (it fails silently if WhatsApp isn't installed).
-                        await shareJobCardPdf(order, card, lines, existingStages ?? [], repeatCount);
-                      } catch (e) {
-                        setError(describeDbError(e, 'Job card'));
-                      } finally {
-                        setExporting(null);
-                      }
-                    }}
-                  />
-                </View>
-              ) : null}
-
-              {/* First press locks the needle mapping, advances every repeat to
-                  ready-for-production, and is what makes "Ask for material"
-                  (below) appear — the client is told at the same time. */}
-              {card ? (
-                <View style={{ marginTop: spacing.md }}>
-                  <AppButton
-                    title={card.vendor_informed_at ? 'Client informed ✓' : 'Client informed'}
-                    variant="secondary"
-                    onPress={() =>
-                      card.vendor_informed_at
-                        ? undefined
-                        : confirmAction(
-                            'Client informed',
-                            'This notifies the client the job card is ready, locks the needle mapping, and moves every repeat to ready-for-production.',
-                            () => {
-                              setError(null);
-                              vendorInformedMutation.mutate();
-                            }
-                          )
-                    }
-                    loading={vendorInformedMutation.isPending}
-                    disabled={busy || !!card.vendor_informed_at}
-                  />
-                  {card.vendor_informed_at ? (
-                    <Text style={styles.help}>
-                      Client informed {new Date(card.vendor_informed_at).toLocaleString()}
-                    </Text>
-                  ) : null}
-                </View>
-              ) : null}
+              {/* The Regenerate / Download / Share / Client Approved buttons were
+                  here, below everything. They are in the action bar at the top
+                  of this screen now. */}
             </>
           )}
         </Section>
 
-        {/* ---- 3. Material ----
-            Gated on the job card being confirmed, and nothing else — the same
-            single condition fm_ask_for_material enforces (migration 0052).
-            "Client informed" is the only path to 'confirmed', so in practice
-            this appears the moment that button is pressed; keying off the
-            status rather than the vendor_informed_at stamp is what stops a
-            legacy-confirmed card from being stranded with no way forward. */}
-        {isConfirmed && card ? (
-          <Section title="3 · Material">
-            <AppButton
-              title={card.material_requested_at ? 'Material requested ✓' : 'Ask for material'}
-              onPress={() => {
-                setError(null);
-                askForMaterialMutation.mutate();
-              }}
-              loading={askForMaterialMutation.isPending}
-              disabled={busy || !!card.material_requested_at}
-            />
-            {card.material_requested_at ? (
-              <Text style={styles.help}>
-                Material requested {new Date(card.material_requested_at).toLocaleString()} — the
-                store manager can now see it in Material Requests.
-              </Text>
-            ) : (
-              <Text style={styles.help}>
-                Nothing appears in the store manager's Material Requests until you ask.
-              </Text>
-            )}
-          </Section>
-        ) : null}
+        {/* The "3 · Material" section was here, with an "Ask for material"
+            button gated on the card being confirmed. Both are gone: 0088 folded
+            the request into Client Approved, so by the time this screen could
+            have shown the button the request has already been made. */}
 
         {isConfirmed ? (
           <ActionBanner
             tone="neutral"
             title="Job card confirmed"
-            subtitle={`All ${repeats?.length ?? 0} repeats are ready for production, and the order is released to the store manager for material issue.`}
+            subtitle={`All ${repeats?.length ?? 0} repeats are ready for production, and the material has been requested from the store manager.`}
             style={styles.bannerGap}
           />
         ) : null}
-
-        {error ? <Text style={styles.error}>{error}</Text> : null}
 
         {/* ---- Progress (from repeat_stage_history) ---- */}
         {timeline?.length ? (
@@ -473,6 +452,20 @@ function Section({ title, children }: { title: string; children: React.ReactNode
 }
 
 const styles = StyleSheet.create({
+  actionBar: {
+    marginTop: spacing.lg,
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: spacing.sm,
+  },
+  actionBtn: { flexGrow: 1, flexBasis: '46%' },
+  sequenceLine: {
+    fontFamily: fontFamily.sansMedium,
+    fontSize: fontSize.body,
+    fontWeight: fontWeight.medium,
+    color: colors.ink,
+    textTransform: 'capitalize',
+  },
   reqNote: { padding: spacing.md, fontSize: fontSize.caption, color: colors.slate },
   bannerGap: { marginBottom: spacing.lg },
   content: { padding: spacing.xl },

@@ -9,6 +9,8 @@ import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { useAuth } from '../auth/AuthContext';
 import { LoginScreen } from '../screens/shared/LoginScreen';
 import { RoleRouter } from './RoleRouter';
+import { PartnerPortalScreen } from '../screens/finishingPartner/PartnerPortalScreen';
+import { partnerTokenFromUrl } from '../utils/partnerLink';
 import { colors, fontSize, spacing, fontWeight } from '../constants/theme';
 
 const Stack = createNativeStackNavigator();
@@ -24,6 +26,19 @@ function Splash() {
 
 export function RootNavigator() {
   const { initializing, hydrating, session } = useAuth();
+
+  /**
+   * The finishing partner's link, if this is one.
+   *
+   * Read ONCE, before anything else decides what to render: a partner opening
+   * their bookmark has no account, so waiting on the session restore would show
+   * them a splash and then a login screen they can never get past. Read from
+   * the URL at mount and never re-read — the token cannot change without a
+   * page load, and re-reading on every render would fight React Query's
+   * refetches for no gain.
+   */
+  const [partnerToken] = React.useState(partnerTokenFromUrl);
+  if (partnerToken) return <PartnerPortalScreen token={partnerToken} />;
 
   // Splash during launch restore and during the post-login profile fetch,
   // so the user never sees a flash of the wrong stack.

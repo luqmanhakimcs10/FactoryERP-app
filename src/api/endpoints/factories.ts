@@ -7,8 +7,10 @@ import type {
   Factory,
   FactoryModule,
   Module,
-  SaFactoryInventoryRow,
+  FactoryInvoiceStatus,
+  SaBillingSummary,
   SaFactoryListRow,
+  SaInvoiceRow,
   SaFactoryModuleRow,
   SubscriptionStatus,
 } from '../../models/types';
@@ -138,20 +140,70 @@ export async function saToggleModule(
   if (error) throw error;
 }
 
-export async function saFactoryInventory(factoryId: string): Promise<SaFactoryInventoryRow[]> {
-  const { data, error } = await supabase.rpc('sa_factory_inventory', {
-    p_factory_id: factoryId,
+// ---- Platform billing (0085) ----
+//
+// There is no longer any inventory reader here. `saFactoryInventory` and
+// `saLastAudit` were removed with their RPCs: Super Admin has no access to a
+// factory's stock, in any form, on any screen.
+
+/**
+ * Invoice rows. One function, three callers:
+ *   - Invoice History tab      -> no arguments
+ *   - Billing "Pending" sub-tab -> status 'pending'
+ *   - a factory's Payment History -> that factory's id
+ */
+export async function saInvoiceList(args?: {
+  status?: FactoryInvoiceStatus;
+  factoryId?: string;
+}): Promise<SaInvoiceRow[]> {
+  const { data, error } = await supabase.rpc('sa_invoice_list', {
+    p_status: args?.status ?? null,
+    p_factory_id: args?.factoryId ?? null,
   });
   if (error) throw error;
-  return (data as SaFactoryInventoryRow[]) ?? [];
+  return (data as SaInvoiceRow[]) ?? [];
 }
 
-export async function saLastAudit(factoryId: string): Promise<string | null> {
-  const { data, error } = await supabase.rpc('sa_last_audit', {
-    p_factory_id: factoryId,
+/** Pending total, counts and lifetime collected — the Billing section header. */
+export async function saBillingSummary(): Promise<SaBillingSummary> {
+  const { data, error } = await supabase.rpc('sa_billing_summary');
+  if (error) throw error;
+  // A set-returning function comes back as an array of one row.
+  const row = (Array.isArray(data) ? data[0] : data) as SaBillingSummary | undefined;
+  return (
+    row ?? {
+      pending_total: 0,
+      pending_count: 0,
+      overdue_count: 0,
+      paid_total: 0,
+      factory_count: 0,
+    }
+  );
+}
+
+/** Raise the next cycle's invoice against a factory. */
+export async function saIssueInvoice(input: {
+  factoryId: string;
+  amount?: number | null;
+  dueDate?: string | null;
+  note?: string | null;
+}): Promise<void> {
+  const { error } = await supabase.rpc('sa_issue_invoice', {
+    p_factory_id: input.factoryId,
+    p_amount: input.amount ?? null,
+    p_due_date: input.dueDate ?? null,
+    p_note: input.note ?? null,
   });
   if (error) throw error;
-  return (data as string | null) ?? null;
+}
+
+/** Settle one pending invoice. Also re-derives the factory's Paid/Unpaid pill. */
+export async function saMarkInvoicePaid(invoiceId: string): Promise<void> {
+  const { error } = await supabase.rpc('sa_mark_invoice_paid', {
+    p_invoice_id: invoiceId,
+    p_paid_on: null,
+  });
+  if (error) throw error;
 }
 
 export type { Factory, Module, FactoryModule };

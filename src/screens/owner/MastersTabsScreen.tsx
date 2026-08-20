@@ -13,9 +13,14 @@ import { Screen } from '../../components/ui/Screen';
 import { DashboardHeader } from '../../components/ui/DashboardHeader';
 import { TaskBanners } from '../../components/ui/TaskBanners';
 import { MasterCard, CardGrid } from '../../components/ui/MasterCard';
+import { StatCard, StatGrid } from '../../components/ui/StatGrid';
+import { statCount, statMoney } from '../../utils/statValue';
 import { matchesSearch } from '../../utils/search';
 import { countEmployees } from '../../api/endpoints/employees';
 import { countMasters } from '../../api/endpoints/masters';
+import { listOrders, listFactoryDamage } from '../../api/endpoints/orders';
+import { getApprovalsQueue, listInvoices } from '../../api/endpoints/finance';
+import { ACTIVE_ORDER_STATUSES } from '../../models/orderTypes';
 import { colors, spacing, fontSize } from '../../constants/theme';
 
 interface MasterCardConfig {
@@ -74,6 +79,40 @@ export function MastersTabsScreen() {
   const navigation = useNavigation<any>();
   const [search, setSearch] = useState('');
 
+  /**
+   * The owner's four. Each is a read one of their own screens already makes.
+   *
+   * REVENUE THIS MONTH is INVOICED this month, from `invoices.issued_at` — the
+   * closest live figure without running the P&L report, which is a heavier
+   * query and module-gated behind finance_reports. Money actually collected is
+   * on the accountant's Receivables screen; this card is what the factory
+   * billed, which is what an owner glances at.
+   */
+  const metrics = useQuery({
+    queryKey: ['ownerMetrics'],
+    queryFn: async () => {
+      const monthStart = new Date();
+      monthStart.setDate(1);
+      monthStart.setHours(0, 0, 0, 0);
+
+      const [active, approvals, damage, invoices] = await Promise.all([
+        listOrders(ACTIVE_ORDER_STATUSES),
+        getApprovalsQueue().catch(() => []),
+        listFactoryDamage().catch(() => []),
+        listInvoices().catch(() => []),
+      ]);
+
+      return {
+        activeOrders: active.length,
+        approvals: approvals.length,
+        damage: damage.length,
+        revenue: invoices
+          .filter((i) => i.status !== 'cancelled' && new Date(i.issued_at) >= monthStart)
+          .reduce((n, i) => n + Number(i.amount ?? 0), 0),
+      };
+    },
+  });
+
   const { data, isError } = useQuery({
     queryKey: ['masterCardCounts'],
     queryFn: async () => {
@@ -111,6 +150,34 @@ export function MastersTabsScreen() {
       />
       <ScrollView contentContainerStyle={styles.container}>
         <TaskBanners />
+
+        <View style={styles.metrics}>
+          <StatGrid>
+            <StatCard
+              label="Active orders"
+              value={statCount(metrics.data?.activeOrders)}
+              icon="document-text-outline"
+            />
+            <StatCard
+              label="Invoiced this month"
+              value={metrics.isError ? '—' : statMoney(metrics.data?.revenue)}
+              icon="cash-outline"
+            />
+            <StatCard
+              label="Pending approvals"
+              value={statCount(metrics.data?.approvals)}
+              icon="checkmark-done-outline"
+              tone={metrics.data?.approvals ? 'attention' : 'neutral'}
+              onPress={() => navigation.navigate('ApprovalsInbox')}
+            />
+            <StatCard
+              label="Damage records"
+              value={statCount(metrics.data?.damage)}
+              icon="alert-circle-outline"
+              tone={metrics.data?.damage ? 'attention' : 'neutral'}
+            />
+          </StatGrid>
+        </View>
         <CardGrid>
           {visible.map((card) => (
             <MasterCard
@@ -149,6 +216,7 @@ export function MastersTabsScreen() {
 }
 
 const styles = StyleSheet.create({
+  metrics: { marginBottom: spacing.lg },
   container: { padding: spacing.lg, paddingTop: spacing.xl },
   banner: { marginBottom: spacing.lg },
   empty: { paddingTop: spacing.xl, color: colors.inkMuted, fontSize: fontSize.secondary, textAlign: 'center' },

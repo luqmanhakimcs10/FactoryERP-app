@@ -50,14 +50,33 @@ export interface SaFactoryModuleRow {
   enabled: boolean;
 }
 
-/** Row from sa_factory_inventory(). */
-export interface SaFactoryInventoryRow {
+/**
+ * Platform billing (0085). One row per billing cycle per factory — the thing
+ * the Super Admin's Billing section, Invoice History tab and a factory's
+ * Payment History all render.
+ */
+export type FactoryInvoiceStatus = 'pending' | 'paid' | 'cancelled';
+
+export interface SaInvoiceRow {
   id: string;
-  color_code: string;
-  color_name: string | null;
-  photo_url: string | null;
-  quantity_meters: number;
-  last_audit_at: string | null;
+  factory_id: string;
+  factory_name: string;
+  invoice_code: string;
+  amount: number;
+  issued_on: string;
+  due_date: string | null;
+  status: FactoryInvoiceStatus;
+  paid_on: string | null;
+  note: string | null;
+}
+
+/** Row from sa_billing_summary(). */
+export interface SaBillingSummary {
+  pending_total: number;
+  pending_count: number;
+  overdue_count: number;
+  paid_total: number;
+  factory_count: number;
 }
 
 export interface Module {
@@ -103,10 +122,11 @@ export interface Vendor extends MasterBase {
   name: string;
   contact: string | null;
   address: string | null;
-  /** Pricing terms per client (0030). */
+  /** Pricing terms per client (0030). `price` was dropped in 0086. */
   rate_per_repeat?: number | null;
   rate_per_stitch?: number | null;
-  price?: number | null;
+  /** The day this client is invoiced on — ISO date, picked on a calendar (0086). */
+  billing_date?: string | null;
 }
 
 export interface Supplier extends MasterBase {
@@ -115,7 +135,19 @@ export interface Supplier extends MasterBase {
   address?: string | null;
   /** Day of month payments are due (0030). */
   payment_day?: number | null;
+  /** Which inventory types this supplier is a source for (0086). */
+  inventory_types?: InventoryItemType[];
 }
+
+/** The four stock types `inventory_items.item_type` allows (0068). */
+export type InventoryItemType = 'thread' | 'tilla' | 'sequin' | 'bobbin';
+
+export const INVENTORY_TYPE_LABEL: Record<InventoryItemType, string> = {
+  thread: 'Thread',
+  tilla: 'Tilla',
+  sequin: 'Sequin',
+  bobbin: 'Bobbin',
+};
 
 export interface Machine extends MasterBase {
   name: string;
@@ -143,10 +175,17 @@ export interface FinishingPartner extends MasterBase {
   stage_type: StageType;
   rate_basis: RateBasis;
   rate: number;
-  /** The partner's own login, for their read-only dashboard. */
+  /**
+   * Legacy login link. Partners are no longer given accounts (0086) — the
+   * column survives so partners created before the change keep resolving.
+   */
   user_id: string | null;
-  /** Extended partners handle stages beyond their primary type (0030). */
-  is_extended_partner?: boolean;
+  /**
+   * The partner's persistent, bookmarkable link (0086). Unguessable, tied to
+   * this record, and revoked by archiving the partner.
+   */
+  access_token?: string | null;
+  token_issued_at?: string | null;
 }
 
 // ---- Company admin: employee compensation (0030) ----

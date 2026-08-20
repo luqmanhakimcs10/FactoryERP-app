@@ -62,7 +62,14 @@
     "drive:handover": "node scripts/drive-to-handover.mjs",
     "verify:needles": "node scripts/verify-needle-stitches.mjs",
     "check:columns": "node scripts/check-sql-columns.mjs",
-    "verify:workflow": "node scripts/verify-workflow-fixes.mjs"
+    "verify:workflow": "node scripts/verify-workflow-fixes.mjs",
+    "verify:superadmin": "node scripts/verify-super-admin-tabs.mjs",
+    "verify:masters": "node scripts/verify-masters-and-roles.mjs",
+    "verify:returns": "node scripts/verify-return-ownership.mjs",
+    "verify:qaflow": "node scripts/verify-qa-and-order-taker.mjs",
+    "verify:fmpo": "node scripts/verify-fm-and-po.mjs",
+    "verify:status": "node scripts/verify-status-board.mjs",
+    "verify:stats": "node scripts/verify-stat-grids.mjs"
   },
   "private": true
 }

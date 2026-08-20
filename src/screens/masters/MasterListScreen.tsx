@@ -20,7 +20,6 @@ import { useNavigation, useRoute } from '@react-navigation/native';
 import { Screen } from '../../components/ui/Screen';
 import { SearchBar } from '../../components/lists/SearchBar';
 import { ListRow } from '../../components/lists/ListRow';
-import { SelectField } from '../../components/forms/SelectField';
 import { listMasters } from '../../api/endpoints/masters';
 import { getMasterConfig } from '../../masters/configs';
 import { useAuth } from '../../auth/AuthContext';
@@ -46,7 +45,6 @@ export function MasterListScreen({ entity }: { entity?: string } = {}) {
 
   const [search, setSearch] = useState('');
   const [showArchived, setShowArchived] = useState(false);
-  const [machineType, setMachineType] = useState<string | null>(null);
 
   const moduleOk = config.module
     ? isModuleEnabled(config.module, enabledModules, role)
@@ -54,20 +52,14 @@ export function MasterListScreen({ entity }: { entity?: string } = {}) {
 
   const canWrite = canAccessRole(role, config.writeRoles) && moduleOk;
 
-  const machineTypeOptions = useMemo(() => {
-    const field = config.fields.find((f) => f.key === 'machine_type');
-    return field?.options ?? [];
-  }, [config.fields]);
-
   const { data, isLoading, isError, error, refetch, isRefetching } = useQuery({
-    queryKey: ['masters', config.table, search, showArchived, machineType],
+    queryKey: ['masters', config.table, search, showArchived],
     queryFn: () =>
       listMasters({
         table: config.table,
         searchField: config.searchField,
         search,
         includeArchived: showArchived,
-        filter: machineType ? { machine_type: machineType } : undefined,
       }),
     enabled: moduleOk,
   });
@@ -97,17 +89,8 @@ export function MasterListScreen({ entity }: { entity?: string } = {}) {
   return (
     <Screen padded={false}>
       <View style={styles.toolbar}>
-        {config.key === 'machines' ? (
-          <SelectField
-            label="Machine type"
-            value={machineType}
-            options={[{ value: '', label: 'All' }, ...machineTypeOptions]}
-            onChange={(v) => setMachineType(v)}
-            allowClear
-            clearLabel="All"
-            emptyHint="No machine types available."
-          />
-        ) : null}
+        {/* The machine-type filter is gone with the selector that fed it —
+            machines are found by their number now. */}
         <SearchBar
           value={search}
           onChangeText={setSearch}

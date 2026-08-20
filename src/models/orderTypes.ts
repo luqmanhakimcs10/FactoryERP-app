@@ -70,6 +70,28 @@ export interface Order {
   vendors?: { name: string; contact?: string | null; address?: string | null };
 }
 
+/**
+ * Every status an order can hold while it is still WORK — captured but not yet
+ * delivered or cancelled.
+ *
+ * Lives here rather than in the Orders box that first needed it: four
+ * dashboards now count "active orders", and four private copies of this list is
+ * four places to forget a status when one is added.
+ */
+export const ACTIVE_ORDER_STATUSES: OrderStatus[] = [
+  'awaiting_procurement',
+  'awaiting_cloth_inspection',
+  'awaiting_coding',
+  'awaiting_job_card',
+  'job_card_shared',
+  'job_card_confirmed',
+  'machine_selection_pending',
+  'in_production',
+  'in_finishing',
+  'awaiting_final_qa',
+  'ready_for_delivery',
+];
+
 export interface OrderListRow extends Order {
   vendor_name: string;
   sheet_count: number;
@@ -207,6 +229,12 @@ export interface TimelineStep {
   state: 'done' | 'current' | 'ahead';
   at: string | null;
   detail: string | null;
+  /**
+   * Storage PATH of the evidence photo for this step, when one exists (0087).
+   * Not a URL: the bucket is private, so the screen resolves a signed URL the
+   * same way it does for the order's own photo strip.
+   */
+  photo_url: string | null;
 }
 
 // ---- RPC inputs ----

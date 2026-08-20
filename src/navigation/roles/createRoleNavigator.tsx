@@ -21,7 +21,6 @@ import { ReturnsScreen } from '../../screens/orderTaker/ReturnsScreen';
 import { QaDashboardScreen } from '../../screens/qa/QaDashboardScreen';
 import { InspectionQueueScreen } from '../../screens/qa/InspectionQueueScreen';
 import { StageTrackingQueueScreen } from '../../screens/qa/StageTrackingQueueScreen';
-import { ClothInspectionScreen } from '../../screens/qa/ClothInspectionScreen';
 import { OrderQaScreen } from '../../screens/qa/OrderQaScreen';
 import { FloorManagerDashboardScreen } from '../../screens/floorManager/FloorManagerDashboardScreen';
 import { OrdersBoxScreen } from '../../screens/floorManager/OrdersBoxScreen';
@@ -32,9 +31,9 @@ import { JobCardScreen } from '../../screens/floorManager/JobCardScreen';
 import { JobCardBuilderScreen } from '../../screens/floorManager/JobCardBuilderScreen';
 import { JobCardReviewScreen } from '../../screens/floorManager/JobCardReviewScreen';
 import { StageTrackingScreen } from '../../screens/floorManager/StageTrackingScreen';
+import { FmOrderDetailScreen } from '../../screens/floorManager/FmOrderDetailScreen';
 import { PoQueueScreen } from '../../screens/procurement/PoQueueScreen';
 import { PoDetailScreen } from '../../screens/procurement/PoDetailScreen';
-import { NewPoScreen } from '../../screens/procurement/NewPoScreen';
 import { StockHomeScreen } from '../../screens/storeManager/StockHomeScreen';
 import { StockLedgerScreen } from '../../screens/storeManager/StockLedgerScreen';
 import { GrnQueueScreen } from '../../screens/storeManager/GrnQueueScreen';
@@ -114,7 +113,6 @@ import { getMasterConfig } from '../../masters/configs';
 import { DeliveryOrdersScreen } from '../../screens/deliveryPerson/DeliveryOrdersScreen';
 import { SlaAlertsScreen } from '../../screens/deliveryPerson/SlaAlertsScreen';
 import { FinalDeliveryScreen } from '../../screens/deliveryPerson/FinalDeliveryScreen';
-import { FinalPassQueueScreen } from '../../screens/qa/FinalPassQueueScreen';
 
 // ---- Phase 8: Worker & Finishing Partner dashboards ----
 import { WorkerDashboardScreen } from '../../screens/worker/DashboardScreen';
@@ -124,10 +122,11 @@ import { LeaveRequestScreen } from '../../screens/worker/LeaveRequestScreen';
 import { PartnerDashboardScreen } from '../../screens/finishingPartner/PartnerDashboardScreen';
 
 // ---- Super Admin: factory management & billing ----
-import { FactoryListScreen } from '../../screens/superAdmin/FactoryListScreen';
+import { SuperAdminHomeScreen } from '../../screens/superAdmin/SuperAdminHomeScreen';
 import { FactoryDetailScreen } from '../../screens/superAdmin/FactoryDetailScreen';
 import { NewFactoryScreen } from '../../screens/superAdmin/NewFactoryScreen';
-import { ModuleToggleScreen } from '../../screens/superAdmin/ModuleToggleScreen';
+import { EditFactoryScreen } from '../../screens/superAdmin/EditFactoryScreen';
+import { FactoryPaymentHistoryScreen } from '../../screens/superAdmin/FactoryPaymentHistoryScreen';
 
 /** The home screen each role lands on. */
 function homeFor(role: Role): React.ComponentType {
@@ -154,12 +153,18 @@ function homeFor(role: Role): React.ComponentType {
       // One tab: Orders. The old Handoff/Return/SLA split is gone — every leg
       // of this role's work is an entry in this single list now.
       return DeliveryOrdersScreen;
+    case ROLES.ORDER_DELIVERY:
+      // The merged role lands on the order taker's launcher, which grows a
+      // third card ("Deliveries") for this role — one home, both jobs, rather
+      // than a near-copy of a dashboard that already exists.
+      return OrderTakerDashboardScreen;
     case ROLES.WORKER:
       return WorkerDashboardScreen;
     case ROLES.FINISHING_PARTNER:
       return PartnerDashboardScreen;
     case ROLES.SUPER_ADMIN:
-      return FactoryListScreen;
+      // Three tabs — Dashboard, Modules, Invoice History — and no inventory.
+      return SuperAdminHomeScreen;
     case ROLES.COMPANY_ADMIN:
       return MastersTabsScreen;
     default:
@@ -174,9 +179,23 @@ export function createRoleNavigator(role: Role) {
   const hasMasters = mastersForRole(role).length > 0;
 
   // Order-spine screens: which roles can reach which.
-  const canOrders = role === ROLES.ORDER_TAKER;
+  // The merged Order/Delivery Person reaches BOTH halves' screens.
+  const isOrderDelivery = role === ROLES.ORDER_DELIVERY;
+  const canOrders = role === ROLES.ORDER_TAKER || isOrderDelivery;
+  const canDelivery = role === ROLES.DELIVERY || isOrderDelivery;
   const canQA = role === ROLES.QA;
-  const canJobCard = role === ROLES.FLOOR_MANAGER;
+  /**
+   * The floor surface: orders box, job card, stage tracking, and the granular
+   * status board on FmOrderDetail.
+   *
+   * The OWNER is on this list from 0090, for two reasons. The brief restricts
+   * the status board to Floor Manager and Owner — and the owner had no route to
+   * an order at all, which also left their own task banners ("3 orders need a
+   * job card") pointing at screens their navigator never registered. Every RPC
+   * behind these screens already accepts `company_admin`; only the routes were
+   * missing.
+   */
+  const canJobCard = role === ROLES.FLOOR_MANAGER || role === ROLES.COMPANY_ADMIN;
   // Everyone touching the spine needs the read-only order detail.
   const canOrderDetail = canOrders || canQA || canJobCard;
 
@@ -266,7 +285,7 @@ export function createRoleNavigator(role: Role) {
         ) : null}
 
         {/* Returns: read-only stage tracking for the orders this user captured. */}
-        {role === ROLES.ORDER_TAKER ? (
+        {canOrders ? (
           <Stack.Screen name="Returns" component={ReturnsScreen} options={{ title: 'Returns' }} />
         ) : null}
 
@@ -281,11 +300,8 @@ export function createRoleNavigator(role: Role) {
               component={InspectionQueueScreen}
               options={{ title: 'Awaiting order inspection' }}
             />
-            <Stack.Screen
-              name="ClothInspection"
-              component={ClothInspectionScreen}
-              options={{ title: 'Cloth inspection' }}
-            />
+            {/* The one destination per order: cloth inspection and repeat
+                coding are steps inside this screen, not separate routes. */}
             <Stack.Screen
               name="OrderQa"
               component={OrderQaScreen}
@@ -295,11 +311,6 @@ export function createRoleNavigator(role: Role) {
               name="StageTrackingQueue"
               component={StageTrackingQueueScreen}
               options={{ title: 'Repeats & stage tracking' }}
-            />
-            <Stack.Screen
-              name="FinalPassQueue"
-              component={FinalPassQueueScreen}
-              options={{ title: 'Final pass' }}
             />
             <Stack.Screen
               name="StageTracking"
@@ -312,6 +323,14 @@ export function createRoleNavigator(role: Role) {
         {canJobCard ? (
           <>
             <Stack.Screen name="OrdersBox" component={OrdersBoxScreen} options={{ title: 'Orders' }} />
+            {/* The floor manager's own order screen: Order Details / Job Card /
+                Progress. `OrderDetail` (the order taker's read-only tracker) is
+                still registered for the roles it belongs to. */}
+            <Stack.Screen
+              name="FmOrderDetail"
+              component={FmOrderDetailScreen}
+              options={{ title: 'Order' }}
+            />
             <Stack.Screen name="MachineBox" component={MachineBoxScreen} options={{ title: 'Machine' }} />
             <Stack.Screen name="LeaveBox" component={LeaveBoxScreen} options={{ title: 'Leave' }} />
             <Stack.Screen name="DamagesBox" component={DamagesBoxScreen} options={{ title: 'Damages' }} />
@@ -352,9 +371,9 @@ export function createRoleNavigator(role: Role) {
           </>
         ) : null}
 
-        {canProcurement ? (
-          <Stack.Screen name="NewPo" component={NewPoScreen} options={{ title: 'New PO' }} />
-        ) : null}
+        {/* "NewPo" was procurement's manual PO creation. Procurement is
+            read-only from 0089 — the store manager raises purchase orders, from
+            StoreNewPo. */}
 
         {/* ---- Phase 4: store manager ---- */}
         {canStock ? (
@@ -504,8 +523,17 @@ export function createRoleNavigator(role: Role) {
             dropping the route would orphan the only way to complete a delivery.
             HandoffQueue / ReturnQueue / SlaAlerts are deliberately not
             registered any more: their work is now rows in the Orders list. */}
-        {role === ROLES.DELIVERY ? (
+        {canDelivery ? (
           <>
+            {/* The merged role's home is the order launcher, so its delivery
+                list needs a route of its own — the "Deliveries" card opens it. */}
+            {isOrderDelivery ? (
+              <Stack.Screen
+                name="DeliveryOrders"
+                component={DeliveryOrdersScreen}
+                options={{ title: 'Deliveries' }}
+              />
+            ) : null}
             <Stack.Screen name="FinalDelivery" component={FinalDeliveryScreen} options={{ title: 'Complete delivery' }} />
           </>
         ) : null}
@@ -643,9 +671,14 @@ export function createRoleNavigator(role: Role) {
               options={{ title: 'Add factory' }}
             />
             <Stack.Screen
-              name="ModuleToggle"
-              component={ModuleToggleScreen}
-              options={{ title: 'Module toggle' }}
+              name="EditFactory"
+              component={EditFactoryScreen}
+              options={{ title: 'Edit factory' }}
+            />
+            <Stack.Screen
+              name="FactoryPaymentHistory"
+              component={FactoryPaymentHistoryScreen}
+              options={{ title: 'Payment history' }}
             />
           </>
         ) : null}
