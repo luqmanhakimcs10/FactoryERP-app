@@ -12,7 +12,8 @@
  *   - "Manager" is gone as an option. Floor Manager and Store Manager are
  *     picked directly, so there is no second "which kind of manager?" question
  *     and no way to create the role-with-no-navigator that 0033 was patching.
- *   - "Initial QA" is "QA" again.
+ *   - The inspection role is "Inspector" (0092). Its key is still `qa` — the
+ *     label changed, not the role.
  */
 import React, { useState } from 'react';
 import { View, Text, ScrollView, StyleSheet } from 'react-native';
@@ -33,7 +34,7 @@ const ROLE_OPTIONS: Option[] = [
   { value: 'worker', label: 'Worker' },
   { value: 'floor_manager', label: 'Floor Manager' },
   { value: 'store_manager', label: 'Store Manager' },
-  { value: 'qa', label: 'QA' },
+  { value: 'qa', label: 'Inspector' },
   { value: 'order_delivery', label: 'Order/Delivery Person' },
   { value: 'labour', label: 'Labour' },
 ];

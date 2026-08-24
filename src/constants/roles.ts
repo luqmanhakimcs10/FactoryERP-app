@@ -42,8 +42,19 @@ export const ROLE_LABEL: Record<Role, string> = {
   store_manager: 'Store Manager',
   order_taker: 'Order Taker',
   order_delivery: 'Order/Delivery Person',
-  // Reverted from "Initial QA": this role does every QA pass, not the first one.
-  qa: 'QA',
+  /*
+   * "Inspector", not "QA".
+   *
+   * The KEY stays `qa` — it is a foreign key from `profiles.role`, it appears
+   * in every role gate in the database, and renaming it would be a data
+   * migration to change a word on a badge. `roles.name` in the database was
+   * changed to match (0092), so a screen reading the role name from either
+   * side agrees.
+   *
+   * The INSPECTIONS keep their names: Stage QA, Pass QA, Final QA. Those are
+   * steps, not people, and only the role was renamed.
+   */
+  qa: 'Inspector',
   procurement: 'Procurement',
   delivery: 'Delivery',
   worker: 'Worker',

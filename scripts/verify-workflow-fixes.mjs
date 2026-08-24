@@ -364,14 +364,15 @@ if (others.length) {
 const handed = await rpc('floor', 'fm_hand_over_stage', {
   p_repeat_id: REP.id, p_delivery_id: DP.id, p_partner_id: PARTNER.id,
 });
-chk(handed.ok && handed.body?.current_status === 'awaiting_dp_collection',
+// 0092 folded the collection into this press: the handover IS the collection.
+chk(handed.ok && handed.body?.current_status === 'handed_over',
   `"Handover to ${STAGE2}" → ${handed.ok ? handed.body?.current_status : handed.msg}`);
 st = await repeatNow();
 chk(st.current_delivery_id === DP.id, '  the chosen delivery person is recorded on the repeat');
 chk(st.current_partner_id === PARTNER.id, '  the chosen finishing partner is recorded on the repeat');
 
 // ===========================================================================
-head('  FIX 5 — Collection → Delivery → Pickup, a photo at every leg');
+head('  FIX 5 (as amended by 0092) — Delivery → Pickup → Delivery, a photo at every leg');
 // ===========================================================================
 const dpRow = async () => {
   const q = await rpc('delivery', 'dp_orders_queue');
@@ -381,18 +382,17 @@ const dpRow = async () => {
 
 let row = await dpRow();
 chk(!!row, `${REP.repeat_code} is in the delivery person's queue`);
-chk(row?.tab === 'collection', `  tab = collection (is ${row?.tab})`);
+chk(row?.tab === 'delivery', `  tab = delivery, straight away (is ${row?.tab})`);
+chk(row?.destination_kind === 'partner', `  bound for the partner (is ${row?.destination_kind})`);
 chk(row?.current_delivery_id === T.delivery.userId, '  the queue row is scoped to this delivery person');
 chk(row?.partner_name === PARTNER.name, `  it already knows its destination partner (${row?.partner_name})`);
 chk(row?.destination_stage === STAGE2, `  and the stage it is going FOR (${row?.destination_stage})`);
 
-const noPhotoCollect = await rpc('delivery', 'dp_collect_from_floor', { p_repeat_id: REP.id, p_photo_url: '' });
-chk(!noPhotoCollect.ok && /photo/i.test(noPhotoCollect.msg), '  Collect without a photo is REFUSED');
-chk((await rpc('delivery', 'dp_collect_from_floor', { p_repeat_id: REP.id, p_photo_url: PHOTO })).ok,
-  '  Collect WITH a photo → handed_over');
-
-row = await dpRow();
-chk(row?.tab === 'delivery', `  the row moved to the Delivery tab (is ${row?.tab})`);
+// The Collection tab and its RPC are gone: the FM's handover was the only
+// thing that ever produced the state they existed to clear.
+const collectGone = await rpc('delivery', 'dp_collect_from_floor', { p_repeat_id: REP.id, p_photo_url: PHOTO });
+chk(!collectGone.ok && /schema cache|function/i.test(collectGone.msg),
+  '  dp_collect_from_floor is GONE — the handover is the collection now');
 
 // The delivery person no longer picks the partner — that RPC is gone.
 const oldSend = await rpc('delivery', 'dp_send_to_partner', { p_repeat_id: REP.id, p_partner_id: PARTNER.id });
@@ -413,9 +413,12 @@ chk(!!row?.handed_off_at, '  the SLA clock is running (handed_off_at stamped)');
 
 const partnerWork = await rpc('partner', 'partner_active_work');
 chk((partnerWork.body ?? []).some((r) => r.repeat_id === REP.id),
-  '  the finishing partner sees it in their active work');
-chk((await rpc('partner', 'partner_ready_for_collection', { p_repeat_id: REP.id })).ok,
-  '  the partner marks their work finished');
+  '  the finishing partner sees it in their READ-ONLY active work list');
+// 0092: the partner presses nothing. The row is collectable with no flag set,
+// which is the point — waiting on a partner-side button meant waiting on
+// something that may never be sent.
+chk(row?.partner_ready_at == null,
+  '  and no partner-ready flag is set, yet the piece is collectable anyway');
 
 const noPhotoBack = await rpc('delivery', 'dp_collect_from_partner', { p_repeat_id: REP.id, p_photo_url: '' });
 chk(!noPhotoBack.ok && /photo/i.test(noPhotoBack.msg), '  Collect back without a photo is REFUSED');
@@ -423,18 +426,22 @@ chk((await rpc('delivery', 'dp_collect_from_partner', { p_repeat_id: REP.id, p_p
   '  Collect back WITH a photo → returned_to_delivery');
 
 row = await dpRow();
-chk(row?.tab === 'pickup', `  still in Pickup for the return to the floor (is ${row?.tab})`);
-chk((await rpc('delivery', 'dp_hand_back_to_floor', { p_repeat_id: REP.id })).ok,
-  '  Return to Floor Manager → awaiting_fm_collection');
-
-const gone = await dpRow();
-chk(gone === null, '  and it leaves the delivery person\'s queue entirely');
+chk(row?.tab === 'delivery' && row?.destination_kind === 'qa',
+  `  back in Delivery, this time bound for the Inspector (is ${row?.tab}/${row?.destination_kind})`);
+const handBackGone = await rpc('delivery', 'dp_hand_back_to_floor', { p_repeat_id: REP.id });
+chk(!handBackGone.ok && /schema cache|function/i.test(handBackGone.msg),
+  '  dp_hand_back_to_floor is GONE — the piece goes to the Inspector, not back to the floor');
 
 // ===========================================================================
-head('  FIX 6 — What comes back from a partner is inspected before it advances');
+head('  FIX 6 (as amended by 0092) — the drop-off at the Inspector advances the stage');
 // ===========================================================================
-const collected = await rpc('floor', 'fm_confirm_collection', { p_repeat_id: REP.id });
-chk(collected.ok, `FM confirms collection → ${collected.ok ? 'ok' : collected.msg}`);
+const noPhotoQa = await rpc('delivery', 'dp_deliver_to_qa', { p_repeat_id: REP.id, p_photo_url: '' });
+chk(!noPhotoQa.ok && /photo/i.test(noPhotoQa.msg), '  Deliver to the Inspector without a photo is REFUSED');
+const collected = await rpc('delivery', 'dp_deliver_to_qa', { p_repeat_id: REP.id, p_photo_url: PHOTO });
+chk(collected.ok, `DP delivers to the Inspector → ${collected.ok ? 'ok' : collected.msg}`);
+const confirmGone = await rpc('floor', 'fm_confirm_collection', { p_repeat_id: REP.id });
+chk(!confirmGone.ok && /schema cache|function/i.test(confirmGone.msg),
+  '  fm_confirm_collection is GONE — there is nothing left for the FM to confirm');
 st = await repeatNow();
 chk(st.current_stage_index === 2, `  advanced to stage 2 (is ${st.current_stage_index})`);
 chk(st.current_status === 'stage_qa',
@@ -467,8 +474,8 @@ const mineJ = J.filter((e) => e.repeat_id === REP.id);
 
 const statuses = mineJ.map((e) => e.status);
 const wanted = [
-  'in_progress', 'stage_qa', 'handover_for_delivery', 'awaiting_dp_collection',
-  'handed_over', 'handed_off', 'returned_to_delivery', 'awaiting_fm_collection',
+  'in_progress', 'stage_qa', 'handover_for_delivery',
+  'handed_over', 'handed_off', 'returned_to_delivery',
   'stage_qa', 'awaiting_final_qa',
 ];
 for (const w of new Set(wanted)) {

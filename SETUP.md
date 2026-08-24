@@ -1584,8 +1584,169 @@ delivery is refused both boards (403/403)
 order is refused both boards (403/403)
 ```
 
-0091 is the only migration outstanding. Until it is pasted the partner's three
-cards render and read "—"; `verify:stats` says so rather than passing quietly.
+0091 was the only migration outstanding when this section was written; it has
+since landed. **0092 is now the outstanding one** — see the section below for
+what it changes and what is pending until it is pasted.
+
+---
+
+## Simplified delivery cycle, Inspector, one-screen job card — (0092 PENDING)
+
+```
+0092_delivery_cycle_simplification.sql   <- paste this, in the SQL editor
+npm run check:migrations                 # confirms it landed
+npm run verify:cycle                     # the whole brief, end to end, twice round the loop
+npm run walk:lifecycle                   # the full lifecycle, both factories
+```
+
+Eight changes. Seven of them are one idea: **a handover inside the building is
+one event, not two.**
+
+### The cycle went from eight stops to four
+
+```
+BEFORE                              AFTER
+in_progress                         in_progress          stage 1, in-house
+stage_qa            (QA)            stage_qa             (Inspector) + photo
+handover_for_delivery (FM)          handover_for_delivery (FM) "Handover to X"
+awaiting_dp_collection (DP) photo        |
+handed_over           (DP) photo    handed_over          (DP, DELIVERY tab) photo
+handed_off                          handed_off           at the partner
+returned_to_delivery  (DP)          returned_to_delivery (DP, DELIVERY tab) photo
+awaiting_fm_collection (FM)              |
+   -> next stage at stage_qa        -> next stage at stage_qa
+```
+
+`awaiting_dp_collection` and `awaiting_fm_collection` are gone, and they were
+the same mistake at both ends of the trip: two people standing next to each
+other each pressing a button about one physical transfer.
+
+- The **Floor Manager's handover IS the delivery person's collection**. One
+  press, and the piece lands in the Delivery tab ready to go out.
+- The **delivery person's drop-off at the Inspector IS the stage advancing**.
+  No "with manager" wait in between, and no label for one — QA passing is what
+  surfaces the piece back to the Floor Manager, which it already did.
+
+Four callables are DROPPED, not merely unused: `dp_collect_from_floor`,
+`dp_hand_back_to_floor`, `fm_confirm_collection`, `fm_pending_collections`.
+Left on the REST surface each would be a transition out of a state the app can
+no longer enter — this codebase's recurring bug. `verify:cycle` asserts all four
+return 404. `dp_deliver_to_qa` replaces the last two.
+
+**Pieces already in flight are drained by the migration itself** (section 6),
+not left stranded: `awaiting_dp_collection` becomes `handed_over` (same piece,
+same hands, one less button), and `awaiting_fm_collection` lands where
+`dp_deliver_to_qa` would have put it — stage index +1, at Stage QA. Written as
+plain DML rather than through `log_repeat_stage`, which reads `auth.uid()` and
+would fail on every row in the SQL editor.
+
+### Two tabs, four statuses
+
+The Delivery Person's dashboard is **Delivery** and **Pickup**. A piece cycles:
+
+| # | Status | Where | Action |
+|---|--------|-------|--------|
+| 1 | `handed_over` | Delivery tab | deliver to the finishing partner + photo |
+| 2 | `handed_off` | "In Pickup" | nothing — it is at the partner |
+| 3 | `handed_off` | Pickup tab | collect it back + photo |
+| 4 | `returned_to_delivery` | Delivery tab | deliver to the Inspector + photo |
+| — | `stage_qa` | Completion | read-only; the Inspector has it now |
+
+2 and 3 are the same row seen twice — "In Pickup" is what the piece IS, the
+Pickup tab is where you go to do something about it. 1 and 4 are the same
+ACTION in opposite directions, which is why one tab holds both;
+`destination_kind` on the queue row says which, so the button can name it
+without the client deciding for itself which transition a status allows.
+
+`completion` is a status, not a third tab: it is reachable from the metric card
+and nothing on those rows is pressable. It exists so the last leg of the job
+does not vanish from the screen of the person who did it.
+
+### The finishing partner presses nothing
+
+Both partner views — the logged-in dashboard and the bookmarkable link — are
+**read-only**. "Handover to delivery person" is gone from both. It never moved
+custody (0062 made it a signal, not a gate), but a piece nobody pressed it for
+looked like a piece nobody had finished, and that is the dependency the brief
+removes. The Pickup tab lists every piece that is out, with time-at-partner and
+the SLA, so the delivery person judges rather than waits.
+
+`partner_ready_for_collection` and `partner_portal_mark_ready` are deliberately
+KEPT in the database. They gate nothing; removing the buttons and removing the
+capability are different decisions.
+
+### Embroidery never reaches the delivery person
+
+Nothing filters it out. Stage 1 runs in-house on the factory's own machines, so
+an in-house stage never reaches a status `dp_orders_queue` selects — a stronger
+guarantee than a filter. The status board drops its `handover:1` / `pickup:1`
+rows for the same reason. The first point this role is involved at all is the
+handover that FOLLOWS embroidery.
+
+### The Inspector goes straight into Start QA
+
+The whole-cloth accept/flag screen is gone (`ClothInspectionStep.tsx` deleted).
+It asked for a judgement about cloth nobody had looked at yet, and all it
+produced was permission to start doing the thing they had come to do.
+
+`awaiting_cloth_inspection` STAYS as an order status — it is what `submit_order`
+lands on and what the Order Taker's tracker reads. What changed is that the
+**first piece decision leaves it**: `qa_pass_piece` and `qa_reject_piece` accept
+either status and call `qa_open_inspection` first, stamping `inspected_at` so
+the timeline and status board stay correct. `qa_accept_cloth` and
+`qa_report_cloth_damage` are kept in the database, unreachable from any screen.
+
+### "QA" the role is "Inspector"
+
+`roles.qa.name` and `ROLE_LABEL.qa` both read **Inspector**. The KEY stays `qa`:
+it is a foreign key from `profiles.role`, it appears in 74 `assert_role` calls
+and every RLS policy on the order spine, and renaming it would be a data
+migration to change a word on a badge. The INSPECTIONS keep their names — Stage
+QA, Pass QA, Final QA are steps, not people.
+
+### Job card: one screen
+
+`JobCardReviewScreen.tsx` is deleted and its route is gone. Design sheet photo,
+stage sequence, needle/thread/stitch lines and design details are all on
+`JobCardBuilderScreen`.
+
+There are still two presses on it — "Create needle lines" and "Submit job card"
+— and neither navigates. The needle lines are generated SERVER-SIDE from the
+order's own thread colours (`fm_generate_job_card`), so they cannot be edited
+before they exist. Building the draft client-side and committing on one press
+was the alternative, and it costs what the review step was originally split out
+to provide: `order_color_requirements` computes the per-colour cone requirement
+and the SHORTFALL from saved lines and live stock, so a wrong stitch count is
+visible while it is still being typed rather than after it has become a purchase
+order.
+
+### Green for done, orange for in progress
+
+Two new tokens — `colors.progressDone` (#158A4E) and `colors.progressActive`
+(#C2670B) — and the one deliberate exception to this app's two-colour rule.
+Everywhere else, teal-or-coral answers "does this need me". A progress display
+asks "how far along is this", which has three values of which two are positive;
+teal for both "finished" and "happening now" made a stage tracker where every
+step past the first looked identical.
+
+They are used by `StageProgress` (dots, stitch runs, state words), the
+Floor-Manager/Owner status board (dots and count pills) and `RepeatStatusPill`
+— and nowhere else. Damage and SLA breach stay coral: "gone wrong" must not read
+as "in progress". Both inks clear 4.5:1 on their own wash, and every dot still
+carries a tick or a text label, so nothing depends on colour alone.
+
+### What the scripts now assert
+
+`npm run verify:cycle` is new and covers the brief point by point, walking one
+order through TWO finishing stages — which is the only way to see the loop
+CLOSE, since the second handover can only exist if QA's pass on the first put
+the piece back in the Floor Manager's hands.
+
+`walk:lifecycle`, `verify:tenancy`, `verify:stage-handover`, `verify:workflow`,
+`verify:fivefixes`, `verify:status`, `drive-to-handover`, `check:migrations` and
+the banner scripts were all updated to the new cycle. `verify:status` expects a
+sequence four rows shorter, with no "With Manager after ..." row anywhere on the
+board rather than only after the last stage.
 
 ---
 

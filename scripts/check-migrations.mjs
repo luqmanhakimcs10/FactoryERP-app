@@ -315,12 +315,13 @@ const MIGRATIONS = [
     // fm_hand_over_stage is NOT probed: 0084 replaced its 1-arg form with a
     // 3-arg one, and re-running 0056 on that advice would put both on the REST
     // surface — a bare hand-over with no courier named, beside the real one.
-    // These three are 0056's own and unchanged since.
-    probes: [
-      () => col('repeats', 'current_partner_id'),
-      () => rpc('dp_collect_from_floor', { p_repeat_id: NIL, p_photo_url: '' }),
-      () => rpc('fm_confirm_collection', { p_repeat_id: NIL }),
-    ],
+    //
+    // dp_collect_from_floor and fm_confirm_collection are not probed either,
+    // and for a stronger reason: 0092 DROPPED both. Probing them here would
+    // report 0056 as missing on a database that is fully up to date, and the
+    // advice ("re-run 0056") would put two retired transitions back.
+    probes: [() => col('repeats', 'current_partner_id')],
+    note: "dp_collect_from_floor / dp_hand_back_to_floor / fm_confirm_collection / fm_pending_collections were 0056's and are DROPPED by 0092. `npm run verify:cycle` asserts each returns 404.",
   },
   {
     file: '0057_assign_machine_and_return_photo',
@@ -526,6 +527,14 @@ const MIGRATIONS = [
   {
     file: '0091_partner_portal_stats',
     probes: [() => rpc('partner_portal_stats', { p_token: 'probe', p_period: null })],
+  },
+  {
+    file: '0092_delivery_cycle_simplification',
+    probes: [
+      () => rpc('dp_deliver_to_qa', { p_repeat_id: NIL, p_photo_url: '' }),
+      () => rpc('qa_open_inspection', { p_order_id: NIL }),
+    ],
+    note: "the REMOVALS are the other half of this file and no probe can see them from the positive side — `npm run verify:cycle` asserts dp_collect_from_floor, dp_hand_back_to_floor, fm_confirm_collection and fm_pending_collections all return 404, that roles.qa.name reads 'Inspector', and that the status board carries no 'With Manager after ...' row.",
   },
   {
     file: '0073_fix_grn_queue_join',

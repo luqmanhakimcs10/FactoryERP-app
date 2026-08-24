@@ -582,7 +582,13 @@ function BoardRow({
       {/* A count is only meaningful on a stage row. Milestones are order-wide,
           and a "0" beside "Job Card Approved" would read as a failure. */}
       {row.kind === 'stage' ? (
-        <View style={[styles.countPill, (row.count ?? 0) === 0 && styles.countPillZero]}>
+        <View
+          style={[
+            styles.countPill,
+            active && styles.countPillActive,
+            (row.count ?? 0) === 0 && styles.countPillZero,
+          ]}
+        >
           <Text style={[styles.countPillText, (row.count ?? 0) === 0 && styles.countPillTextZero]}>
             {row.count ?? 0}
           </Text>
@@ -756,8 +762,11 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  boardDotDone: { backgroundColor: colors.success, borderColor: colors.success },
-  boardDotActive: { backgroundColor: colors.accent, borderColor: colors.accent },
+  // Green for a step that is finished, orange for the one work is sitting on
+  // right now — the same pair `StageProgress` uses, so the compact board and
+  // the full timeline never disagree about what a colour means.
+  boardDotDone: { backgroundColor: colors.progressDone, borderColor: colors.progressDone },
+  boardDotActive: { backgroundColor: colors.progressActive, borderColor: colors.progressActive },
   boardLabel: { fontSize: fontSize.secondary, color: colors.inkMuted },
   boardLabelActive: { color: colors.ink, fontWeight: fontWeight.semibold },
   boardMeta: { marginTop: 1, fontSize: fontSize.caption, color: colors.inkSubtle },
@@ -771,6 +780,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   countPillZero: { backgroundColor: colors.border },
+  countPillActive: { backgroundColor: colors.progressActive },
   countPillText: {
     fontFamily: fontFamily.mono,
     fontSize: fontSize.caption,

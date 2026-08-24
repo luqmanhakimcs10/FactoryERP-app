@@ -49,7 +49,6 @@ const rpc = async (fn, tok, args) => {
 const ROUTES = {
   awaiting_job_card: (i) => (i.status === 'awaiting_job_card' ? ['JobCardBuilder', i.order_id] : ['JobCard', i.order_id]),
   accept_inventory:  () => ['OrdersBox', 'tab'],
-  fm_collect:        (i) => ['StageTracking', i.order_id],
   fm_handover:       (i) => ['StageTracking', i.order_id],
   fm_final_qa:       (i) => ['FinalQaDetail', i.order_id],
   fm_shift_close:    (i) => ['ShiftClose', i.secondary_id],
@@ -63,13 +62,13 @@ const ROUTES = {
   sm_audit_today:    () => ['DailyAudit', 'n/a'],
   material_requests: (i) => ['IssueDetail', i.secondary_id],
   grn_pending:       (i) => ['GrnDetail', i.secondary_id],
-  qa_inspection:     (i) => (i.status === 'awaiting_cloth_inspection' ? ['ClothInspection', i.order_id] : ['OrderQa', i.order_id]),
+  // One destination for both statuses since 0092 — there is no cloth-acceptance
+  // screen in front of Start QA any more.
+  qa_inspection:     (i) => ['OrderQa', i.order_id],
   qa_stage:          (i) => ['StageTracking', i.order_id],
   qa_final:          () => ['FinalPassQueue', 'n/a'],
-  dp_collect:        () => ['(inline)', 'n/a'],
-  dp_send:           () => ['(inline)', 'n/a'],
+  dp_deliver:        () => ['(inline)', 'n/a'],
   dp_pickup:         () => ['(inline)', 'n/a'],
-  dp_handback:       () => ['(inline)', 'n/a'],
   dp_final_delivery: () => ['(inline)', 'n/a'],
   partner_active:    () => ['(inline)', 'n/a'],
   ot_returns:        () => ['Returns', 'n/a'],

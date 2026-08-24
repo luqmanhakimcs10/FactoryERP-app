@@ -74,12 +74,7 @@ export async function partnerPortalStats(token: string): Promise<PartnerPortalSt
   return (Array.isArray(data) ? data[0] : data) ?? null;
 }
 
-/** "I have finished this piece" — the delivery person's signal to collect. */
-export async function partnerPortalMarkReady(token: string, repeatId: string) {
-  const { data, error } = await supabase.rpc('partner_portal_mark_ready', {
-    p_token: token,
-    p_repeat_id: repeatId,
-  });
-  if (error) throw error;
-  return data;
-}
+// `partnerPortalMarkReady` was here. The link-based view is read-only from
+// 0092: the partner presses nothing, and the delivery person's Pickup tab
+// lists every piece that is out rather than only the flagged ones. The RPC is
+// still in the database and still gates nothing.

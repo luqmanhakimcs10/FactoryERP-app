@@ -46,8 +46,9 @@ export function FloorManagerDashboardScreen() {
       const [active, awaitingCard, inProduction, stageQa] = await Promise.all([
         listOrders(ACTIVE_ORDER_STATUSES),
         listOrders(['awaiting_job_card', 'job_card_shared']),
-        countRepeatsByStatus(['in_progress', 'handed_off', 'handed_over', 'awaiting_dp_collection',
-          'returned_to_delivery', 'awaiting_fm_collection']),
+        // The four live states of the simplified cycle (0092): on the machine,
+        // with the delivery person, at a partner, coming back.
+        countRepeatsByStatus(['in_progress', 'handed_over', 'handed_off', 'returned_to_delivery']),
         countRepeatsByStatus(['stage_qa']),
       ]);
       return {

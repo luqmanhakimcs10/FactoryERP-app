@@ -1,16 +1,22 @@
 /**
- * Order QA — the ONE screen a QA user lands on for a single order.
+ * Order QA — the ONE screen an Inspector lands on for a single order, and now
+ * the FIRST thing they see when they tap it.
  *
- * It used to start at `awaiting_coding`, with cloth inspection living on its
- * own screen behind its own bucket on the queue. Both steps are here now:
- * an order still awaiting cloth inspection shows `ClothInspectionStep` at the
- * top of the Repeat QA tab, and accepting the cloth reveals the piece list
- * underneath it without navigating anywhere. QA has one destination per order.
+ * THE CLOTH GATE IS GONE (0092). There were two steps here: accept or flag the
+ * whole consignment, and only then inspect it piece by piece. The first asked
+ * for a judgement about cloth nobody had looked at yet, and all it produced was
+ * permission to start doing the second. Tapping an order now opens straight
+ * into Start QA, and accepting or flagging happens where the evidence is — on
+ * the individual piece, with a photo, pass or reject.
  *
- * Four tabs: Repeat QA (cloth inspection, then the piece-by-piece pass/reject
- * gate — see StartQaModal and migration 0034), Job card (read-only preview; the
- * floor manager still owns building it), Repeats & stage tracking, and Damage
- * records.
+ * The order still passes THROUGH `awaiting_cloth_inspection`; nothing about
+ * submission changed. What changed is that the first piece decision is what
+ * leaves it, so the Inspector never presses anything to be allowed to begin.
+ * See `qa_open_inspection` in 0092.
+ *
+ * Four tabs: Repeat QA (the piece-by-piece pass/reject gate — see StartQaModal
+ * and migration 0034), Job card (read-only preview; the floor manager still
+ * owns building it), Repeats & stage tracking, and Damage records.
  */
 import React, { useMemo, useState } from 'react';
 import { View, Text, ScrollView, Pressable, StyleSheet, ActivityIndicator } from 'react-native';
@@ -23,7 +29,6 @@ import { StageProgress } from '../../components/ui/StageProgress';
 import { StatusPill, OrderStatusPill } from '../../components/ui/StatusPill';
 import { StageTrackingTable } from '../../components/ui/StageTrackingTable';
 import { StartQaModal } from './StartQaModal';
-import { ClothInspectionStep } from './ClothInspectionStep';
 import {
   getOrder,
   listSheets,
@@ -161,11 +166,18 @@ export function OrderQaScreen() {
     (n, s) => n + s.pieces.filter((p) => p.status === 'recheck').length,
     0
   );
-  const canInspect = order?.status === 'awaiting_coding';
-  // Step 1 of the same flow. While this is true the piece list is visible but
-  // inert — QA can see what is coming without being able to act on cloth that
-  // has not been accepted yet.
-  const needsClothInspection = order?.status === 'awaiting_cloth_inspection';
+  /*
+   * BOTH statuses are inspectable now.
+   *
+   * `awaiting_cloth_inspection` means "submitted, nobody has looked yet" and
+   * `awaiting_coding` means "inspection under way". The Inspector's job is the
+   * same in both, and the database agrees: `qa_pass_piece` / `qa_reject_piece`
+   * accept either and advance the order themselves on the first decision.
+   * Gating the buttons on the second status alone would put the removed step
+   * back, in the client this time.
+   */
+  const canInspect =
+    order?.status === 'awaiting_coding' || order?.status === 'awaiting_cloth_inspection';
   const allPassed = totalPieces > 0 && unresolved === 0 && outstanding === 0;
 
   const completeMutation = useMutation({
@@ -210,8 +222,6 @@ export function OrderQaScreen() {
 
       {activeTab === 'repeat_qa' ? (
         <ScrollView contentContainerStyle={styles.content}>
-          {needsClothInspection ? <ClothInspectionStep orderId={orderId} /> : null}
-
           <View style={styles.repeatQaHead}>
             <Text style={styles.sectionTitle}>Repeat QA</Text>
             <AppButton
@@ -238,11 +248,6 @@ export function OrderQaScreen() {
                       : `${passedCount} of ${totalPieces} piece${totalPieces === 1 ? '' : 's'} passed${
                           writtenOff > 0 ? `, ${writtenOff} written off` : ''
                         }.`}
-            </Text>
-          ) : needsClothInspection ? (
-            <Text style={styles.progressNote}>
-              {totalPieces} piece{totalPieces === 1 ? '' : 's'} will need inspecting once the cloth
-              is accepted above.
             </Text>
           ) : (
             <Text style={styles.progressNote}>

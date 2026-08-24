@@ -1253,15 +1253,10 @@ const EXPECTED_ROLE = {
             const handed = await rpc('fm_hand_over_stage', A.fm, {
               p_repeat_id: walk.id, p_delivery_id: courierId, p_partner_id: handlerForStage(stage + 1),
             });
-            chk(handed.status === 200 && handed.body?.current_status === 'awaiting_dp_collection',
+            // 0092: the Floor Manager's handover IS the collection. The piece
+            // lands in the delivery person's hands in one press, not two.
+            chk(handed.status === 200 && handed.body?.current_status === 'handed_over',
               `stage ${stage}: Handover naming courier + handler -> ${handed.body?.current_status}`);
-
-            chk((await rpc('dp_collect_from_floor', A.dp, { p_repeat_id: walk.id, p_photo_url: '' })).status >= 400,
-              `stage ${stage}: Collect without a photo is refused`);
-            const got = await rpc('dp_collect_from_floor', A.dp,
-              { p_repeat_id: walk.id, p_photo_url: `alpha/vt-collect-${stage}.jpg` });
-            chk(got.status === 200 && got.body?.current_status === 'handed_over',
-              `stage ${stage}: Collect (photo) -> ${got.body?.current_status}`);
 
             chk((await rpc('dp_handover_to_partner', A.dp, { p_repeat_id: walk.id, p_photo_url: '' })).status >= 400,
               `stage ${stage}: Handover to the partner without a photo is refused`);
@@ -1275,17 +1270,20 @@ const EXPECTED_ROLE = {
             chk(back.status === 200 && back.body?.current_status === 'returned_to_delivery',
               `stage ${stage}: Collect back from partner (photo) -> ${back.body?.current_status}`);
 
-            const handBack = await rpc('dp_hand_back_to_floor', A.dp, { p_repeat_id: walk.id });
-            chk(handBack.status === 200 && handBack.body?.current_status === 'awaiting_fm_collection',
-              `stage ${stage}: Hand back to Floor Manager -> ${handBack.body?.current_status}`);
-
-            chk((await rpc('fm_confirm_collection', A.dp, { p_repeat_id: walk.id })).status >= 400,
-              `stage ${stage}: delivery is refused on the FM's collection confirmation`);
-            const collected = await rpc('fm_confirm_collection', A.fm, { p_repeat_id: walk.id });
-            // 0084, Fix 6: what comes back from a partner is INSPECTED before it
-            // advances, so collection opens the next stage at stage_qa.
+            // 0092: the delivery person takes it to the INSPECTOR, and that
+            // drop-off is what advances the stage. The hand-back-then-confirm
+            // pair recorded one walk across the floor twice, and both halves of
+            // it are dropped from the database.
+            chk((await rpc('dp_deliver_to_qa', A.dp, { p_repeat_id: walk.id, p_photo_url: '' })).status >= 400,
+              `stage ${stage}: delivering to the Inspector without a photo is refused`);
+            chk((await rpc('dp_deliver_to_qa', A.fm, { p_repeat_id: walk.id, p_photo_url: `alpha/vt-qa-${stage}.jpg` })).status >= 400,
+              `stage ${stage}: the floor manager is refused the delivery person's drop-off`);
+            const collected = await rpc('dp_deliver_to_qa', A.dp,
+              { p_repeat_id: walk.id, p_photo_url: `alpha/vt-qa-${stage}.jpg` });
+            // What comes back from a partner is INSPECTED before it advances
+            // (0084, Fix 6), so the drop-off opens the next stage at stage_qa.
             chk(collected.status === 200 && collected.body?.current_status === 'stage_qa',
-              `stage ${stage}: FM Collect -> ${collected.body?.current_status} (the partner's work goes to Stage QA)`);
+              `stage ${stage}: DP delivers to the Inspector -> ${collected.body?.current_status} (the partner's work goes to Stage QA)`);
             chk(collected.body?.current_stage_index === stage + 1,
               `stage ${stage}: next stage ${collected.body?.current_stage_index} opened automatically`);
           }
@@ -1920,7 +1918,7 @@ const EXPECTED_ROLE = {
     const partnerRow = await q('finishing_partners?select=id&deleted_at=is.null&limit=1', A.fm);
     const partnerId = partnerRow.body?.[0]?.id;
     const spare = (spareRepeats.body ?? []).find((r) =>
-      ['in_progress', 'stage_qa', 'handover_for_delivery', 'awaiting_dp_collection', 'handed_over']
+      ['in_progress', 'stage_qa', 'handover_for_delivery', 'handed_over']
         .includes(r.current_status));
 
     if (spare && partnerId) {
@@ -1932,8 +1930,6 @@ const EXPECTED_ROLE = {
           p_delivery_id: ((await rpc('fm_delivery_people', A.fm, {})).body ?? [])[0]?.id ?? null,
           p_partner_id: partnerId,
         }),
-        awaiting_dp_collection: () =>
-          rpc('dp_collect_from_floor', A.dp, { p_repeat_id: spare.id, p_photo_url: 'alpha/handoff/test.jpg' }),
         handed_over: () => rpc('dp_handover_to_partner', A.dp, { p_repeat_id: spare.id, p_photo_url: 'alpha/handoff/test.jpg' }),
       };
       let cur = spare.current_status;
@@ -1943,7 +1939,7 @@ const EXPECTED_ROLE = {
         cur = (await f()).body?.current_status;
       }
       chk(cur === 'handed_off',
-        `drove ${spare.repeat_code} out to a partner through the 0056 loop to exercise Complete Return -> ${cur}`);
+        `drove ${spare.repeat_code} out to a partner through the stage loop to exercise Complete Return -> ${cur}`);
     } else {
       no('no drivable repeat / finishing partner to manufacture a handoff with');
     }

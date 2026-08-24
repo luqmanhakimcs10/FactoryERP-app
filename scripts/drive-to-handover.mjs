@@ -326,11 +326,13 @@ for (const rep of repeats) {
                                             p_delivery_id: courierId,
                                             p_partner_id: handlerFor(rep.id),
                                           }); break;
-      case 'awaiting_dp_collection':  r = await rpc('delivery', 'dp_collect_from_floor', { p_repeat_id: rep.id, p_photo_url: PHOTO }); break;
+      // 0092: two tabs, three transitions. The handover above already put the
+      // piece in the delivery person's hands, and the drop-off at the Inspector
+      // below is what advances the stage — there is no collect-from-floor and
+      // no hand-back-to-floor in between any more.
       case 'handed_over':             r = await rpc('delivery', 'dp_handover_to_partner', { p_repeat_id: rep.id, p_photo_url: PHOTO }); break;
       case 'handed_off':              r = await rpc('delivery', 'dp_collect_from_partner', { p_repeat_id: rep.id, p_photo_url: PHOTO }); break;
-      case 'returned_to_delivery':    r = await rpc('delivery', 'dp_hand_back_to_floor', { p_repeat_id: rep.id }); break;
-      case 'awaiting_fm_collection':  r = await rpc('floor', 'fm_confirm_collection', { p_repeat_id: rep.id }); break;
+      case 'returned_to_delivery':    r = await rpc('delivery', 'dp_deliver_to_qa', { p_repeat_id: rep.id, p_photo_url: PHOTO }); break;
       default: bail(`${rep.repeat_code} sat at an unexpected status "${st}"`);
     }
     if (!r.ok) bail(`${rep.repeat_code} at "${st}": ${r.msg}`);

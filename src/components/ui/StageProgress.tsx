@@ -1,8 +1,14 @@
 /**
  * The stage-progress stitch line — the app's signature motif.
  *
- * A horizontal dashed rule (a row of stitches) with a solid brass dot at the
- * current stage, hollow dots ahead, and completed stages filled success green.
+ * A horizontal dashed rule (a row of stitches) with a solid ORANGE dot at the
+ * current stage, hollow dots ahead, and completed stages filled GREEN.
+ *
+ * Green-for-done / orange-for-in-progress is the rule everywhere progress is
+ * shown, and this is where it is defined. Before it, "done" and "current" were
+ * both teal and separated only by whether the dot carried a tick — which on a
+ * six-step order meant the one thing a reader actually wants from the strip,
+ * where the work has got to, was the hardest thing to see in it.
  *
  * The steps are always passed in from `order_timeline()`, which derives them from
  * repeat_stage_history and the order's own order_stages — never from a hardcoded
@@ -34,8 +40,8 @@ interface Props {
 }
 
 const STATE_COLOR: Record<TimelineStep['state'], string> = {
-  done: colors.success,
-  current: colors.primary,
+  done: colors.progressDone,
+  current: colors.progressActive,
   ahead: colors.border,
 };
 
@@ -149,14 +155,28 @@ function VerticalLine({
 function Dot({ state }: { state: TimelineStep['state'] }) {
   if (state === 'done') {
     return (
-      <View style={[styles.dot, { backgroundColor: colors.success, borderColor: colors.success }]}>
+      <View
+        style={[
+          styles.dot,
+          { backgroundColor: colors.progressDone, borderColor: colors.progressDone },
+        ]}
+      >
         <Ionicons name="checkmark" size={12} color={colors.white} />
       </View>
     );
   }
   if (state === 'current') {
-    // Solid brass dot marks where the work actually is.
-    return <View style={[styles.dot, { backgroundColor: colors.brass, borderColor: colors.brass }]} />;
+    // Solid ORANGE dot marks where the work actually is. The tick on the green
+    // dots above still carries "done" on its own, so the pair is legible
+    // without colour as well as with it.
+    return (
+      <View
+        style={[
+          styles.dot,
+          { backgroundColor: colors.progressActive, borderColor: colors.progressActive },
+        ]}
+      />
+    );
   }
   // Hollow dot for stages ahead.
   return <View style={[styles.dot, { backgroundColor: 'transparent', borderColor: colors.border }]} />;
@@ -164,7 +184,10 @@ function Dot({ state }: { state: TimelineStep['state'] }) {
 
 /** Horizontal run of stitches between two dots. */
 function Stitches({ state }: { state: TimelineStep['state'] }) {
-  const color = state === 'done' ? colors.success : colors.border;
+  // The thread between two dots is only ever "sewn" or "not sewn yet", so it
+  // takes the done colour or the unstarted one — never the in-progress hue,
+  // which belongs to a step rather than to the gap after it.
+  const color = state === 'done' ? colors.progressDone : colors.border;
   return (
     <View style={styles.stitchRun}>
       {Array.from({ length: 6 }).map((_, i) => (
@@ -175,7 +198,7 @@ function Stitches({ state }: { state: TimelineStep['state'] }) {
 }
 
 function VStitches({ state }: { state: TimelineStep['state'] }) {
-  const color = state === 'done' ? colors.success : colors.border;
+  const color = state === 'done' ? colors.progressDone : colors.border;
   return (
     <View style={styles.vStitchRun}>
       {Array.from({ length: 4 }).map((_, i) => (

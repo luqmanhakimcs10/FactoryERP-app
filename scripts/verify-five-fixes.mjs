@@ -164,7 +164,7 @@ console.log('\n=== FIX 3b. Partner Active Work + "Handover to delivery person" =
   const courierId = (couriers.body ?? [])[0]?.id ?? null;
 
   const cand = await q(
-    'repeats?select=id,repeat_code,current_status&current_status=in.(in_progress,handover_for_delivery,awaiting_dp_collection,handed_over)&limit=1',
+    'repeats?select=id,repeat_code,current_status&current_status=in.(in_progress,handover_for_delivery,handed_over)&limit=1',
     A.fm);
   let walk = cand.body?.[0];
   if (walk && partnerId) {
@@ -175,7 +175,8 @@ console.log('\n=== FIX 3b. Partner Active Work + "Handover to delivery person" =
       handover_for_delivery: () => rpc('fm_hand_over_stage', A.fm, {
         p_repeat_id: walk.id, p_delivery_id: courierId, p_partner_id: partnerId,
       }),
-      awaiting_dp_collection: () => rpc('dp_collect_from_floor', A.dp, { p_repeat_id: walk.id, p_photo_url: 'alpha/f5.jpg' }),
+      // 0092: the handover above lands on `handed_over` directly — there is no
+      // collect-from-the-floor step between the two any more.
       handed_over: () => rpc('dp_handover_to_partner', A.dp, { p_repeat_id: walk.id, p_photo_url: 'alpha/f5.jpg' }),
     };
     let cur = walk.current_status;
@@ -204,18 +205,24 @@ console.log('\n=== FIX 3b. Partner Active Work + "Handover to delivery person" =
     chk((await rpc('partner_ready_for_collection', A.dp, { p_repeat_id: walk.id })).status >= 400,
       'the delivery person cannot mark the partner\'s work finished');
 
+    // 0092 REMOVED THE BUTTON, NOT THE RPC. Both partner views are read-only
+    // now — the partner does the physical work and hands the piece over when
+    // the delivery person arrives. What matters is that the delivery person's
+    // Pickup tab never DEPENDED on this flag, so removing the press strands
+    // nothing. The two assertions below are the pair that proves it.
+    const beforeFlag = await rpc('dp_orders_queue', A.dp, {});
+    const beforeRow = (beforeFlag.body ?? []).find((x) => x.repeat_id === walk.id);
+    chk(beforeRow?.tab === 'pickup' && beforeRow?.partner_ready_at == null,
+      'it is in the delivery person\'s Pickup tab with NO partner flag set');
+
     const ready = await rpc('partner_ready_for_collection', A.fp, { p_repeat_id: walk.id });
     chk(ready.status === 200 && !!ready.body?.partner_ready_at,
-      `"Handover to delivery person" -> partner_ready_at set`);
+      'partner_ready_for_collection still EXISTS and still sets the flag — 0092 removed its button, not the capability');
 
     const dpQ = await rpc('dp_orders_queue', A.dp, {});
     const dpRow = (dpQ.body ?? []).find((x) => x.repeat_id === walk.id);
-    chk(!!dpRow?.partner_ready_at, 'the delivery person sees it flagged as finished');
-
-    // ...and it sorts above ordinary work.
-    const idx = (dpQ.body ?? []).findIndex((x) => x.repeat_id === walk.id);
-    const firstPlain = (dpQ.body ?? []).findIndex((x) => !x.sla_breached && !x.partner_ready_at);
-    chk(firstPlain === -1 || idx < firstPlain, 'finished-by-partner rows sort above ordinary ones');
+    chk(dpRow?.tab === 'pickup',
+      'and the row is in exactly the same tab either way — the flag gates nothing');
 
     // Collecting clears the flag so the next stage does not start out "finished".
     const back = await rpc('dp_collect_from_partner', A.dp, { p_repeat_id: walk.id, p_photo_url: 'alpha/f5-back.jpg' });

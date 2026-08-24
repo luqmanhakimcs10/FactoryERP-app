@@ -12,19 +12,41 @@
  */
 import { supabase } from '../client';
 
-/** The statuses a repeat moves through in one stage's cycle, in order. */
+/**
+ * The statuses a repeat moves through in one stage's cycle, in order (0092).
+ *
+ * `awaiting_dp_collection` and `awaiting_fm_collection` were between
+ * handover_for_delivery/handed_over and returned_to_delivery/stage_qa. Both
+ * recorded a handover INSIDE the building as a state of its own, and both are
+ * gone — the person carrying the piece records the move, once.
+ */
 export type HandoverStatus =
   | 'in_progress'
   | 'stage_qa'
   | 'handover_for_delivery'
-  | 'awaiting_dp_collection'
   | 'handed_over'
   | 'handed_off'
-  | 'returned_to_delivery'
-  | 'awaiting_fm_collection';
+  | 'returned_to_delivery';
 
-/** Which of the Delivery Person's three tabs a row belongs in (0084). */
-export type DeliveryTab = 'collection' | 'delivery' | 'pickup';
+/**
+ * Where a row sits on the Delivery Person's screen (0092).
+ *
+ * Two of these are TABS — the two things this role does, drop off and pick up.
+ * `completion` is a STATUS: pieces already delivered to the Inspector, shown
+ * read-only so the last leg of the job does not simply vanish from the screen
+ * of the person who did it.
+ */
+export type DeliveryTab = 'delivery' | 'pickup' | 'completion';
+
+/** The two action tabs, in cycle order. `completion` is deliberately absent. */
+export const DELIVERY_TABS: readonly DeliveryTab[] = ['delivery', 'pickup'] as const;
+
+/**
+ * Where a Delivery-tab piece is going. Decided in SQL from the status, not from
+ * whether a partner name happens to be set — both legs of the round trip carry
+ * a partner, and only the direction tells them apart.
+ */
+export type DeliveryDestination = 'partner' | 'qa';
 
 export interface DpOrderRow {
   repeat_id: string;
@@ -45,6 +67,8 @@ export interface DpOrderRow {
    * under a tab whose action the database will then refuse.
    */
   tab: DeliveryTab;
+  /** Where this leg is headed — names the button without re-deriving it. */
+  destination_kind: DeliveryDestination;
   partner_id: string | null;
   partner_name: string | null;
   /** The stage this trip is FOR — the one the Floor Manager's button named. */
@@ -60,15 +84,9 @@ export interface DpOrderRow {
   current_delivery_id: string | null;
 }
 
-export interface PendingCollectionRow {
-  repeat_id: string;
-  repeat_code: string;
-  order_id: string;
-  order_code: string | null;
-  stage_type: string | null;
-  stage_sequence: number | null;
-  partner_name: string | null;
-}
+// `PendingCollectionRow` was here — the shape of the Floor Manager's
+// "Collect [stage]" prompt. Its RPC is dropped (0092) and nothing can reach the
+// status it listed, so the type had no reader left.
 
 export interface QaFinalRow {
   repeat_id: string;
@@ -116,33 +134,21 @@ export async function handOverStage(repeatId: string, deliveryId: string, partne
   return data;
 }
 
-/**
- * Confirm the piece is physically back on the floor. This is what starts the
- * NEXT stage — there is no separate "start stage" call any more.
- */
-export async function confirmCollection(repeatId: string) {
-  const { data, error } = await supabase.rpc('fm_confirm_collection', { p_repeat_id: repeatId });
-  if (error) throw error;
-  return data;
-}
-
-/** Backs the "Collect [stage]" prompt. Pass an order id to scope it to one order. */
-export async function listPendingCollections(orderId?: string | null): Promise<PendingCollectionRow[]> {
-  const { data, error } = await supabase.rpc('fm_pending_collections', {
-    p_order_id: orderId ?? null,
-  });
-  if (error) throw error;
-  return (data ?? []) as PendingCollectionRow[];
-}
+// `confirmCollection` and `listPendingCollections` were here — the Floor
+// Manager's "Collect [stage]" prompt and the press that answered it. 0092
+// removed the state they both worked on: the delivery person now takes the
+// piece to the Inspector, and that drop-off is what advances the stage. Both
+// RPCs are dropped in the database too, so this is not a hidden capability —
+// there is nothing left for them to act on.
 
 // ---------------------------------------------------------------------------
-// Delivery Person — Collection / Delivery / Pickup (0084)
+// Delivery Person — Delivery / Pickup (0092)
 //
-// One query still backs all three tabs: they are three views of one queue, and
-// the row carries its own `tab`. Since 0084 the queue is also SCOPED — a
+// One query backs both tabs and the completion view: they are three views of
+// one queue, and the row carries its own `tab`. The queue is SCOPED — a
 // delivery person sees the pieces the Floor Manager assigned to them, plus any
-// with no assignment at all (pre-0084 rows, which would otherwise be invisible
-// to everyone).
+// with no assignment at all (older rows, which would otherwise be invisible to
+// everyone).
 // ---------------------------------------------------------------------------
 
 export async function listDeliveryOrders(): Promise<DpOrderRow[]> {
@@ -151,19 +157,13 @@ export async function listDeliveryOrders(): Promise<DpOrderRow[]> {
   return (data ?? []) as DpOrderRow[];
 }
 
-/** Collect from the Floor Manager. Photo is required by the database, not just here. */
-export async function collectFromFloor(repeatId: string, photoUrl: string) {
-  const { data, error } = await supabase.rpc('dp_collect_from_floor', {
-    p_repeat_id: repeatId,
-    p_photo_url: photoUrl,
-  });
-  if (error) throw error;
-  return data;
-}
+// `collectFromFloor` was here. There is no collect-from-the-floor step any
+// more: the Floor Manager's handover IS the collection, and the piece lands
+// straight in the Delivery tab (0092).
 
 /**
- * Hand the piece to the finishing partner the Floor Manager named. Photo
- * required; starts the SLA clock.
+ * DELIVERY TAB, leg one — hand the piece to the finishing partner the Floor
+ * Manager named. Photo required; starts the SLA clock.
  *
  * `partnerId` is a fallback, not a choice — the database uses it only when the
  * repeat carries no partner, which can only be a piece handed over by a
@@ -183,7 +183,11 @@ export async function handoverToPartner(
   return data;
 }
 
-/** Collect back from the partner. Photo required; closes the SLA window. */
+/**
+ * PICKUP TAB — collect back from the partner. Photo required; closes the SLA
+ * window. Nothing on the partner's side has to happen first: they press no
+ * button at all (0092), so this works from the moment the piece is out.
+ */
 export async function collectFromPartner(repeatId: string, photoUrl: string) {
   const { data, error } = await supabase.rpc('dp_collect_from_partner', {
     p_repeat_id: repeatId,
@@ -193,9 +197,19 @@ export async function collectFromPartner(repeatId: string, photoUrl: string) {
   return data;
 }
 
-/** Hand back to the Floor Manager — raises their "Collect [stage]" prompt. */
-export async function handBackToFloor(repeatId: string) {
-  const { data, error } = await supabase.rpc('dp_hand_back_to_floor', { p_repeat_id: repeatId });
+/**
+ * DELIVERY TAB, leg two — deliver the piece to the Inspector. Photo required.
+ *
+ * This is "Completion" from the delivery person's side, and it is also what
+ * ADVANCES THE STAGE: the piece lands at Stage QA on the stage the partner did.
+ * It replaces `handBackToFloor` + the Floor Manager's confirmation, which were
+ * two presses recording one walk across the floor.
+ */
+export async function deliverToQa(repeatId: string, photoUrl: string) {
+  const { data, error } = await supabase.rpc('dp_deliver_to_qa', {
+    p_repeat_id: repeatId,
+    p_photo_url: photoUrl,
+  });
   if (error) throw error;
   return data;
 }
@@ -296,18 +310,11 @@ export async function listPartnerActiveWork(): Promise<PartnerActiveWorkRow[]> {
   return (data ?? []) as PartnerActiveWorkRow[];
 }
 
-/**
- * "Handover to delivery person" — the partner signalling their work is done.
- * A flag for the delivery person, not a state change: custody only moves when
- * the delivery person actually collects (see 0062's header).
- */
-export async function markPartnerReady(repeatId: string) {
-  const { data, error } = await supabase.rpc('partner_ready_for_collection', {
-    p_repeat_id: repeatId,
-  });
-  if (error) throw error;
-  return data;
-}
+// `markPartnerReady` was here — "Handover to delivery person". 0062 made it a
+// signal rather than a gate; 0092 removes it entirely, because a signal a
+// partner has to remember to send is still something the next person waits on.
+// `partner_ready_for_collection` remains in the database and gates nothing, so
+// nothing is stranded by its wrapper going.
 
 // ---------------------------------------------------------------------------
 // Notification bell — what is waiting on me (0062)

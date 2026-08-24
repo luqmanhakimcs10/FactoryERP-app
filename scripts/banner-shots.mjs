@@ -125,7 +125,9 @@ async function login(who) {
  * disappearing: if one of these comes back, this script fails.
  */
 const SUPPRESSED = {
-  delivery: new Set(['dp_collect', 'dp_send', 'dp_pickup', 'dp_handback']),
+  // Two, not four, since 0092 — the delivery person has two tabs and these are
+  // exactly them, sitting directly above the banner stack with the same counts.
+  delivery: new Set(['dp_deliver', 'dp_pickup']),
 };
 
 console.log('\n========= BANNERS ON SCREEN — Alpha =========\n');

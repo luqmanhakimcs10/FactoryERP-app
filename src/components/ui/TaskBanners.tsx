@@ -35,12 +35,12 @@ interface TaskBannersProps {
    *
    * For a screen that is ITSELF the destination of some of its own banners,
    * those banners are a second copy of a control already on screen. The
-   * Delivery Person's dashboard is the case this exists for: dp_collect,
-   * dp_send, dp_pickup and dp_handback all point at its own three tabs, which
-   * sit directly above the banner stack already carrying the same counts. Five
-   * banners then occupy ~680px of a 900px viewport and push every row below the
-   * fold, so all three tabs look identical and switching between them appears
-   * to do nothing. The duplicate is not just noise; it hides the work.
+   * Delivery Person's dashboard is the case this exists for: dp_deliver and
+   * dp_pickup both point at its own two tabs, which sit directly above the
+   * banner stack already carrying the same counts. Stacked banners then occupy
+   * most of the viewport and push every row below the fold, so every tab looks
+   * identical and switching between them appears to do nothing. The duplicate
+   * is not just noise; it hides the work.
    *
    * A banner whose destination is elsewhere is NOT excluded — the delivery
    * person keeps "ready for final delivery", which has no tab of its own.

@@ -5,9 +5,16 @@
  * auth branch when the URL carries a partner token, so a partner who opens
  * their link never sees the login screen at all.
  *
- * It carries what the partner's dashboard carried that they could ACT on — the
- * work in their hands and the "handover to delivery person" signal on each
- * piece — plus three summary numbers, including this month's earnings.
+ * IT IS READ-ONLY (0092). The partner does the physical work and hands the
+ * piece back when the delivery person arrives; nothing they press moves a piece
+ * forward, and nothing the delivery person does waits on them. This page
+ * answers one question — what is with me, and since when — plus three summary
+ * numbers, including this month's earnings.
+ *
+ * The "handover to delivery person" button was here. It never moved custody
+ * (0062 was explicit that it was a signal, not a gate), but a piece nobody
+ * pressed it for looked like a piece nobody had finished, which is exactly the
+ * dependency the brief removes.
  *
  * ON PUTTING EARNINGS HERE: this URL is only as private as whoever the partner
  * forwards it to, so `partner_portal_stats` returns the three figures the cards
@@ -23,9 +30,8 @@ import {
   ActivityIndicator,
   RefreshControl,
 } from 'react-native';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useQuery } from '@tanstack/react-query';
 import { Screen } from '../../components/ui/Screen';
-import { AppButton } from '../../components/ui/AppButton';
 import { StatusPill } from '../../components/ui/StatusPill';
 import { StitchLine } from '../../components/ui/StitchLine';
 import { MetricCard, MetricRow, MetricsSection } from '../../components/ui/MetricCard';
@@ -34,7 +40,6 @@ import {
   partnerPortalInfo,
   partnerPortalWork,
   partnerPortalStats,
-  partnerPortalMarkReady,
   type PartnerPortalWorkRow,
 } from '../../api/endpoints/partnerPortal';
 import { describeDbError } from '../../utils/errors';
@@ -48,9 +53,6 @@ import {
 } from '../../constants/theme';
 
 export function PartnerPortalScreen({ token }: { token: string }) {
-  const queryClient = useQueryClient();
-  const [error, setError] = React.useState<string | null>(null);
-
   const info = useQuery({
     queryKey: ['partnerPortal', 'info', token],
     queryFn: () => partnerPortalInfo(token),
@@ -60,8 +62,9 @@ export function PartnerPortalScreen({ token }: { token: string }) {
   const work = useQuery({
     queryKey: ['partnerPortal', 'work', token],
     queryFn: () => partnerPortalWork(token),
-    // The link is left open on a phone all day; a stale list is the one thing
-    // that makes the partner mark the wrong piece.
+    // The link is left open on a phone all day, and the list changes without
+    // the partner touching anything — a piece leaves it when the delivery
+    // person collects it.
     refetchInterval: 60_000,
     retry: false,
     enabled: !info.isError,
@@ -72,18 +75,6 @@ export function PartnerPortalScreen({ token }: { token: string }) {
     queryFn: () => partnerPortalStats(token),
     retry: false,
     enabled: !info.isError,
-  });
-
-  const ready = useMutation({
-    mutationFn: (repeatId: string) => partnerPortalMarkReady(token, repeatId),
-    onSuccess: () => {
-      setError(null);
-      queryClient.invalidateQueries({ queryKey: ['partnerPortal', 'work', token] });
-      // The active count is one of the three cards, so it has to move with the
-      // list it counts.
-      queryClient.invalidateQueries({ queryKey: ['partnerPortal', 'stats', token] });
-    },
-    onError: (e) => setError(describeDbError(e, 'Handover')),
   });
 
   // A revoked (archived) partner, or a token that never existed. Same message
@@ -182,7 +173,6 @@ export function PartnerPortalScreen({ token }: { token: string }) {
           With you now{rows.length ? ` (${rows.length})` : ''}
         </Text>
 
-        {error ? <Text style={styles.error}>{error}</Text> : null}
         {work.isLoading ? <ActivityIndicator color={colors.primary} /> : null}
         {work.isError ? (
           <Text style={styles.error}>{describeDbError(work.error, 'Your work')}</Text>
@@ -196,35 +186,15 @@ export function PartnerPortalScreen({ token }: { token: string }) {
         ) : null}
 
         {rows.map((r) => (
-          <WorkCard
-            key={r.repeat_id}
-            row={r}
-            busy={ready.isPending && ready.variables === r.repeat_id}
-            disabled={ready.isPending}
-            onReady={() => {
-              setError(null);
-              ready.mutate(r.repeat_id);
-            }}
-          />
+          <WorkCard key={r.repeat_id} row={r} />
         ))}
       </ScrollView>
     </Screen>
   );
 }
 
-function WorkCard({
-  row,
-  busy,
-  disabled,
-  onReady,
-}: {
-  row: PartnerPortalWorkRow;
-  busy: boolean;
-  disabled: boolean;
-  onReady: () => void;
-}) {
+function WorkCard({ row }: { row: PartnerPortalWorkRow }) {
   const stage = (row.stage_type ?? 'stage').replace(/_/g, ' ');
-  const waiting = !!row.partner_ready_at;
 
   return (
     <View style={[styles.card, row.sla_breached && styles.cardLate]}>
@@ -247,23 +217,14 @@ function WorkCard({
         </View>
         <View style={{ gap: 6, alignItems: 'flex-end' }}>
           {row.sla_breached ? <StatusPill label="Past SLA" color={colors.alert} /> : null}
-          {waiting ? <StatusPill label="Awaiting pickup" color={colors.success} /> : null}
+          <StatusPill label="With you" color={colors.progressActive} />
         </View>
       </View>
 
-      {waiting ? (
-        <Text style={styles.meta}>Marked finished — the delivery person will collect it.</Text>
-      ) : (
-        <AppButton
-          title="Handover to delivery person"
-          variant="brass"
-          size="sm"
-          loading={busy}
-          disabled={disabled}
-          onPress={onReady}
-          style={{ marginTop: spacing.sm }}
-        />
-      )}
+      <Text style={styles.meta}>
+        Hand it back to the delivery person when it is done. There is nothing to press here — it
+        leaves this list the moment they collect it.
+      </Text>
     </View>
   );
 }

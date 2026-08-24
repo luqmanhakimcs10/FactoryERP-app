@@ -75,8 +75,8 @@ console.log('\n================ STAGE HANDOVER LOOP (0056/0057) ================
  * it into the loop, so it is not a valid subject for this walk.
  */
 const DRIVABLE = [
-  'in_progress', 'stage_qa', 'handover_for_delivery', 'awaiting_dp_collection',
-  'handed_over', 'handed_off', 'returned_to_delivery', 'awaiting_fm_collection',
+  'in_progress', 'stage_qa', 'handover_for_delivery',
+  'handed_over', 'handed_off', 'returned_to_delivery',
 ];
 
 console.log('\n=== 0. Pick an order that is in production with stages configured ===');
@@ -191,11 +191,9 @@ const HEAD = ['in_progress', 'stage_qa'];
   while (!HEAD.includes(s.current_status) && guard++ < 12) {
     switch (s.current_status) {
       case 'handover_for_delivery':  await rpc('fm_hand_over_stage', A.fm, { p_repeat_id: WALK.id, p_delivery_id: DP_ID, p_partner_id: partnerForNext(s) }); break;
-      case 'awaiting_dp_collection': await rpc('dp_collect_from_floor', A.dp, { p_repeat_id: WALK.id, p_photo_url: 'alpha/seed.jpg' }); break;
       case 'handed_over':            await rpc('dp_handover_to_partner', A.dp, { p_repeat_id: WALK.id, p_photo_url: 'alpha/seed.jpg' }); break;
       case 'handed_off':             await rpc('dp_collect_from_partner', A.dp, { p_repeat_id: WALK.id, p_photo_url: 'alpha/seed.jpg' }); break;
-      case 'returned_to_delivery':   await rpc('dp_hand_back_to_floor', A.dp, { p_repeat_id: WALK.id }); break;
-      case 'awaiting_fm_collection': await rpc('fm_confirm_collection', A.fm, { p_repeat_id: WALK.id }); break;
+      case 'returned_to_delivery':   await rpc('dp_deliver_to_qa', A.dp, { p_repeat_id: WALK.id, p_photo_url: 'alpha/seed.jpg' }); break;
       default: guard = 99;
     }
     s = await statusOf(WALK.id);
@@ -270,29 +268,29 @@ async function walkOneStage(label) {
   r = await rpc('fm_hand_over_stage', A.fm, {
     p_repeat_id: WALK.id, p_delivery_id: DP_ID, p_partner_id: handler.id,
   });
-  chk(r.status === 200 && r.body?.current_status === 'awaiting_dp_collection',
+  // 0092: one press. The Floor Manager's handover IS the collection, so the
+  // piece lands at `handed_over` with nothing in between.
+  chk(r.status === 200 && r.body?.current_status === 'handed_over',
     `"Handover to ${nextName}" (courier + ${handler.name}) -> ${r.body?.current_status}`);
 
-  // 3d. It must now be in the Delivery Person's COLLECTION tab.
+  // 3d. It must land DIRECTLY in the Delivery Person's DELIVERY tab.
   let feed = await rpc('dp_orders_queue', A.dp, {});
   let row = (feed.body ?? []).find((x) => x.repeat_id === WALK.id);
-  chk(row?.tab === 'collection',
-    `appears in the DP's Collection tab (tab=${row?.tab}, destination "${row?.destination_stage}")`);
+  chk(row?.tab === 'delivery',
+    `appears straight in the DP's Delivery tab (tab=${row?.tab}, destination "${row?.destination_stage}")`);
+  chk(row?.destination_kind === 'partner',
+    `bound for the partner, not the Inspector (destination_kind=${row?.destination_kind})`);
   chk(row?.partner_name === handler.name,
     `and already knows its destination partner (${row?.partner_name}) — the DP no longer chooses`);
 
-  // 3e. Collect from Floor Manager — PHOTO REQUIRED
-  const noPhoto = await rpc('dp_collect_from_floor', A.dp, { p_repeat_id: WALK.id, p_photo_url: '  ' });
-  chk(refused(noPhoto) && /photo/i.test(msg(noPhoto)), `collect without a photo is refused -> ${msg(noPhoto)}`);
-  chk(refused(await rpc('dp_collect_from_floor', A.fm, { p_repeat_id: WALK.id, p_photo_url: 'alpha/c1.jpg' })),
-    'FM is refused on the Delivery Person\'s Collect');
-  r = await rpc('dp_collect_from_floor', A.dp, { p_repeat_id: WALK.id, p_photo_url: `alpha/collect-${idx}.jpg` });
-  chk(r.status === 200 && r.body?.current_status === 'handed_over',
-    `Collect (photo) -> ${r.body?.current_status}  [FM reads "Handed Over", DP reads "Delivery waiting"]`);
-
-  feed = await rpc('dp_orders_queue', A.dp, {});
-  row = (feed.body ?? []).find((x) => x.repeat_id === WALK.id);
-  chk(row?.tab === 'delivery', `the row moved to the DP's Delivery tab (tab=${row?.tab})`);
+  // 3e. The collect-from-the-floor step is GONE from the REST surface. Left
+  // callable it would be a transition out of a state nothing can enter.
+  // PGRST202 is "not in the schema cache" — dropped. A function that EXISTS and
+  // raises not-found answers 404 too, with PGRST116, so the code is what tells
+  // them apart.
+  const collectGone = await rpc('dp_collect_from_floor', A.dp, { p_repeat_id: WALK.id, p_photo_url: 'alpha/c1.jpg' });
+  chk(collectGone.body?.code === 'PGRST202',
+    `dp_collect_from_floor is dropped, not merely unused (${collectGone.body?.code ?? collectGone.status})`);
 
   // 3f. Hand it to the partner the FM named — PHOTO REQUIRED since 0084. SLA starts.
   const gone = await rpc('dp_send_to_partner', A.dp, { p_repeat_id: WALK.id, p_partner_id: handler.id });
@@ -327,27 +325,42 @@ async function walkOneStage(label) {
   );
   chk((closed.body?.length ?? 0) === 0, 'the SLA leg is closed (returned_at stamped) — no open leg remains');
 
-  // 3h. Hand back to the Floor Manager -> raises the FM's "Collect [stage]" prompt
-  r = await rpc('dp_hand_back_to_floor', A.dp, { p_repeat_id: WALK.id });
-  chk(r.status === 200 && r.body?.current_status === 'awaiting_fm_collection',
-    `Hand back to Floor Manager -> ${r.body?.current_status}`);
-
+  // 3h. Back in the DELIVERY tab, this time bound for the Inspector (0092).
   feed = await rpc('dp_orders_queue', A.dp, {});
-  chk(!(feed.body ?? []).some((x) => x.repeat_id === WALK.id),
-    'and it leaves the delivery person\'s queue entirely');
+  row = (feed.body ?? []).find((x) => x.repeat_id === WALK.id);
+  chk(row?.tab === 'delivery' && row?.destination_kind === 'qa',
+    `the return leg is a DELIVERY to the Inspector (tab=${row?.tab}, destination_kind=${row?.destination_kind})`);
 
-  const prompt = await rpc('fm_pending_collections', A.fm, { p_order_id: ORDER.id });
-  const prow = (prompt.body ?? []).find((x) => x.repeat_id === WALK.id);
-  chk(!!prow, `FM popup feed shows "Collect ${prow?.stage_type}" for ${prow?.repeat_code}`);
+  // The hand-back / confirm pair recorded one walk across the floor twice, and
+  // all three of its callables are dropped.
+  for (const [fn, who, args] of [
+    ['dp_hand_back_to_floor', A.dp, { p_repeat_id: WALK.id }],
+    ['fm_confirm_collection', A.fm, { p_repeat_id: WALK.id }],
+    ['fm_pending_collections', A.fm, { p_order_id: ORDER.id }],
+  ]) {
+    const g = await rpc(fn, who, args);
+    chk(g.body?.code === 'PGRST202',
+      `${fn} is dropped, not merely unused (${g.body?.code ?? g.status})`);
+  }
 
-  // 3i. FM confirms -> the NEXT STAGE OPENS AT STAGE QA (0084, Fix 6)
-  chk(refused(await rpc('fm_confirm_collection', A.dp, { p_repeat_id: WALK.id })), 'Delivery is refused on the FM\'s Collect confirmation');
-  r = await rpc('fm_confirm_collection', A.fm, { p_repeat_id: WALK.id });
+  // 3i. The DP's drop-off at the Inspector OPENS THE NEXT STAGE AT STAGE QA.
+  const qaNoPhoto = await rpc('dp_deliver_to_qa', A.dp, { p_repeat_id: WALK.id, p_photo_url: '  ' });
+  chk(refused(qaNoPhoto) && /photo/i.test(msg(qaNoPhoto)),
+    `delivering to the Inspector without a photo is refused -> ${msg(qaNoPhoto)}`);
+  chk(refused(await rpc('dp_deliver_to_qa', A.fm, { p_repeat_id: WALK.id, p_photo_url: 'alpha/x.jpg' })),
+    'the Floor Manager is refused the delivery person\'s drop-off');
+  r = await rpc('dp_deliver_to_qa', A.dp, { p_repeat_id: WALK.id, p_photo_url: `alpha/toqa-${idx}.jpg` });
   const after = await statusOf(WALK.id);
   chk(after.current_status === 'stage_qa' && after.current_stage_index === idx + 1,
-    `confirmed -> stage ${after.current_stage_index} ("${stageName(after.current_stage_index)}") opened at ${after.current_status} — the partner's work is inspected, not assumed`);
-  chk(after.current_partner_id === null && after.current_delivery_id === null,
-    'the finished leg\'s partner and courier were cleared, not carried forward');
+    `delivered -> stage ${after.current_stage_index} ("${stageName(after.current_stage_index)}") opened at ${after.current_status} — the partner's work is inspected, not assumed`);
+
+  // The courier and the partner stay on the row until QA passes it: that is
+  // what makes the piece visible in the DP's read-only Completion view, and
+  // `qa_pass_stage_qa` is what clears them.
+  feed = await rpc('dp_orders_queue', A.dp, {});
+  row = (feed.body ?? []).find((x) => x.repeat_id === WALK.id);
+  chk(row?.tab === 'completion',
+    `and it reads as COMPLETION for the delivery person (tab=${row?.tab})`);
   return after;
 }
 
@@ -423,10 +436,16 @@ console.log('\n=== 5. repeat_stage_history recorded every leg ===');
   );
   const seq = (h.body ?? []).map((x) => x.status);
   console.log('  ..    ' + seq.join(' -> '));
-  for (const s of ['in_progress', 'stage_qa', 'handover_for_delivery', 'awaiting_dp_collection',
-                   'handed_over', 'handed_off', 'returned_to_delivery', 'awaiting_fm_collection',
-                   'awaiting_final_qa', 'awaiting_qa_final', 'completed']) {
+  // Two statuses shorter than it was: nothing writes `awaiting_dp_collection`
+  // or `awaiting_fm_collection` any more (0092).
+  for (const s of ['in_progress', 'stage_qa', 'handover_for_delivery',
+                   'handed_over', 'handed_off', 'returned_to_delivery',
+                   'awaiting_final_qa', 'completed']) {
     chk(seq.includes(s), `history contains a "${s}" row`);
+  }
+  const recent = seq.slice(-8);
+  for (const s of ['awaiting_dp_collection', 'awaiting_fm_collection']) {
+    chk(!recent.includes(s), `and this lap wrote no "${s}" row — the stop is retired`);
   }
   const photos = (h.body ?? []).filter((x) => x.photo_url).length;
   chk(photos >= 2, `${photos} history rows carry a custody photo`);
@@ -447,13 +466,10 @@ console.log('\n=== 6. Cross-tenant refusal on every new RPC ===');
 
   const calls = [
     ['fm_hand_over_stage',      'fm', { p_repeat_id: WALK.id, p_delivery_id: DP_ID, p_partner_id: PARTNER.id }],
-    ['dp_collect_from_floor',   'dp', { p_repeat_id: WALK.id, p_photo_url: 'x.jpg' }],
     ['dp_handover_to_partner',  'dp', { p_repeat_id: WALK.id, p_photo_url: 'alpha/x.jpg' }],
     ['dp_collect_from_partner', 'dp', { p_repeat_id: WALK.id, p_photo_url: 'x.jpg' }],
-    ['dp_hand_back_to_floor',   'dp', { p_repeat_id: WALK.id }],
-    ['fm_confirm_collection',   'fm', { p_repeat_id: WALK.id }],
+    ['dp_deliver_to_qa',        'dp', { p_repeat_id: WALK.id, p_photo_url: 'x.jpg' }],
     ['qa_final_pass',           'qa', { p_repeat_id: WALK.id, p_photo_url: 'x.jpg' }],
-    ['fm_pending_collections',  'fm', { p_order_id: ORDER.id }],
   ];
 
   for (const [fn, who, args] of calls) {

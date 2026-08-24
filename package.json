@@ -69,7 +69,8 @@
     "verify:qaflow": "node scripts/verify-qa-and-order-taker.mjs",
     "verify:fmpo": "node scripts/verify-fm-and-po.mjs",
     "verify:status": "node scripts/verify-status-board.mjs",
-    "verify:stats": "node scripts/verify-stat-grids.mjs"
+    "verify:stats": "node scripts/verify-stat-grids.mjs",
+    "verify:cycle": "node scripts/verify-delivery-cycle.mjs"
   },
   "private": true
 }

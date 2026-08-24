@@ -19,7 +19,7 @@ import {
   RefreshControl,
   Platform,
 } from 'react-native';
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useQuery } from '@tanstack/react-query';
 import { useNavigation } from '@react-navigation/native';
 import { useAuth } from '../../auth/AuthContext';
 import { Screen } from '../../components/ui/Screen';
@@ -32,8 +32,7 @@ import {
   getPartnerDamageCharges,
   getPartnerPaymentHistory,
 } from '../../api/endpoints/dashboards';
-import { listPartnerActiveWork, markPartnerReady } from '../../api/endpoints/stageHandover';
-import { AppButton } from '../../components/ui/AppButton';
+import { listPartnerActiveWork } from '../../api/endpoints/stageHandover';
 import { StatusPill } from '../../components/ui/StatusPill';
 import { describeDbError } from '../../utils/errors';
 import { colors, spacing, radius, fontSize, fontWeight, fontFamily } from '../../constants/theme';
@@ -176,24 +175,18 @@ export function PartnerDashboardScreen() {
 /**
  * Every stage currently in this partner's hands (repeat `handed_off` to them).
  *
- * The only place on this dashboard with an action. "Handover to delivery
- * person" flags the piece as finished so the Delivery Person's Orders list
- * pulls it to the top — custody itself only moves when they physically collect
- * it, which is why the row stays here afterwards, marked as awaiting pickup.
+ * READ-ONLY, like the rest of this dashboard (0092).
+ *
+ * "Handover to delivery person" used to sit on each row. It never moved
+ * custody — 0062 was explicit that it was a signal, not a gate — but it was
+ * still a button a partner had to remember to press for a piece to look ready,
+ * and a piece nobody pressed it for looked like a piece nobody had finished.
+ * The finishing partner does the physical work and hands the piece over when
+ * the delivery person arrives; that is the whole of their part in this. The
+ * delivery person's Pickup tab lists every piece that is out, with how long it
+ * has been out, so nothing depends on a press that may never come.
  */
 function ActiveWorkList({ q }: { q: any }) {
-  const queryClient = useQueryClient();
-  const [error, setError] = useState<string | null>(null);
-
-  const ready = useMutation({
-    mutationFn: (repeatId: string) => markPartnerReady(repeatId),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['partner', 'activeWork'] });
-      queryClient.invalidateQueries({ queryKey: ['queueSummary'] });
-    },
-    onError: (e) => setError(describeDbError(e, 'Handover')),
-  });
-
   if (q.isLoading) return <Spinner />;
   if (q.isError) return <Text style={styles.error}>{describeDbError(q.error, 'Active work')}</Text>;
 
@@ -209,10 +202,8 @@ function ActiveWorkList({ q }: { q: any }) {
 
   return (
     <View>
-      {error ? <Text style={styles.error}>{error}</Text> : null}
       {rows.map((r) => {
         const stage = (r.stage_type ?? 'stage').replace(/_/g, ' ');
-        const waiting = !!r.partner_ready_at;
         return (
           <View key={r.repeat_id} style={[styles.activeCard, r.sla_breached && styles.activeCardLate]}>
             <View style={styles.activeTop}>
@@ -234,27 +225,14 @@ function ActiveWorkList({ q }: { q: any }) {
               </View>
               <View style={{ gap: 6, alignItems: 'flex-end' }}>
                 {r.sla_breached ? <StatusPill label="Past SLA" color={colors.alert} /> : null}
-                {waiting ? <StatusPill label="Awaiting pickup" color={colors.success} /> : null}
+                <StatusPill label="With you" color={colors.progressActive} />
               </View>
             </View>
 
-            {waiting ? (
-              <Text style={styles.rowMeta}>
-                Marked finished — the delivery person will collect it.
-              </Text>
-            ) : (
-              <AppButton
-                title="Handover to delivery person"
-                variant="brass"
-                size="sm"
-                loading={ready.isPending && ready.variables === r.repeat_id}
-                onPress={() => {
-                  setError(null);
-                  ready.mutate(r.repeat_id);
-                }}
-                style={{ marginTop: spacing.sm }}
-              />
-            )}
+            <Text style={styles.rowMeta}>
+              Hand it back to the delivery person when it is done — there is nothing to press
+              here.
+            </Text>
           </View>
         );
       })}

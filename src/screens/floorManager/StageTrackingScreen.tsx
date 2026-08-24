@@ -14,7 +14,6 @@ import { useRoute } from '@react-navigation/native';
 import { Screen } from '../../components/ui/Screen';
 import { OrderStatusPill } from '../../components/ui/StatusPill';
 import { StageTrackingTable } from '../../components/ui/StageTrackingTable';
-import { CollectPrompt } from '../../components/ui/CollectPrompt';
 import { AppButton } from '../../components/ui/AppButton';
 import { listStrandedOrders, adoptStrandedRepeats } from '../../api/endpoints/stageHandover';
 import { getOrder, listRepeats, listOrderStages } from '../../api/endpoints/orders';
@@ -65,9 +64,10 @@ export function StageTrackingScreen() {
         </View>
         <Text style={styles.vendor}>{order.vendors?.name}</Text>
 
-        {/* The "Collect [stage]" prompt the delivery person raises by handing
-            back. Scoped to this order so it can't nag about other work. */}
-        <CollectPrompt orderId={orderId} />
+        {/* The "Collect [stage]" prompt was here. Nothing raises it any more:
+            the delivery person delivers to the Inspector, and that drop-off is
+            what advances the stage (0092). Returning pieces land on the table
+            below already at Stage QA. */}
 
         {mine ? (
           <View style={styles.strandedCard}>

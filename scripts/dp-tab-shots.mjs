@@ -149,14 +149,14 @@ for (const [key, label] of [['collection', 'Collection'], ['delivery', 'Delivery
   }
 }
 
-// --- 3. the four tab-duplicating banners are gone -------------------------
-// They pointed at this screen's own three tabs, which sit directly above them
-// carrying the same counts. Five banners then filled ~680px of a 900px viewport
-// and pushed every row below the fold, so all three tabs looked identical and
-// switching between them appeared to do nothing at all. The count still lives
-// on the tab chip and the bell; what is gone is the second copy of it.
+// --- 3. the tab-duplicating banners are gone ------------------------------
+// They point at this screen's own tabs, which sit directly above them carrying
+// the same counts. Stacked banners then filled most of the viewport and pushed
+// every row below the fold, so every tab looked identical and switching between
+// them appeared to do nothing at all. The count still lives on the tab chip and
+// the bell; what is gone is the second copy of it.
 console.log('\n--- the tab-duplicating banners are not rendered ---');
-const BANNER_TAB = { dp_collect: 'Collection', dp_send: 'Delivery', dp_pickup: 'Pickup', dp_handback: 'Pickup' };
+const BANNER_TAB = { dp_deliver: 'Delivery', dp_pickup: 'Pickup' };
 {
   const body = await text();
   for (const b of banners.filter((x) => BANNER_TAB[x.queue_key]))

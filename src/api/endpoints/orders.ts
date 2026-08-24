@@ -218,29 +218,16 @@ export async function updateOrderPhotos(
 
 // ---- QA ----
 
-export async function reportClothDamage(args: {
-  orderId: string;
-  damageType: string;
-  sheetId?: string | null;
-  photoUrl?: string | null;
-  note?: string | null;
-}): Promise<DamageRecord> {
-  const { data, error } = await supabase.rpc('qa_report_cloth_damage', {
-    p_order_id: args.orderId,
-    p_damage_type: args.damageType,
-    p_sheet_id: args.sheetId ?? null,
-    p_photo_url: args.photoUrl ?? null,
-    p_note: args.note ?? null,
-  });
-  if (error) throw error;
-  return data as DamageRecord;
-}
-
-export async function acceptCloth(orderId: string): Promise<Order> {
-  const { data, error } = await supabase.rpc('qa_accept_cloth', { p_order_id: orderId });
-  if (error) throw error;
-  return data as Order;
-}
+// `reportClothDamage` and `acceptCloth` were here — the whole-cloth flag and
+// the accept that gated Repeat QA behind it. 0092 removed that screen: an
+// Inspector tapping an order goes straight into Start QA, and both accepting
+// and flagging happen per piece, where the evidence is.
+//
+// `qa_report_cloth_damage` and `qa_accept_cloth` REMAIN in the database and are
+// deliberately not dropped — the first is the only way to file a
+// consignment-level finding against a vendor, and the second is the only way to
+// advance an order that will never be inspected piecewise. Re-add these
+// wrappers if either is given to a role again.
 
 // ---- Initial QA: piece-by-piece Repeat QA ----
 

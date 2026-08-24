@@ -4,8 +4,9 @@
  *
  *   node scripts/walk-order-lifecycle.mjs [alpha|beta]
  *
- * Covers, in order: create order (order_taker) → submit → cloth inspection (qa)
- * → piece-by-piece repeat QA with one piece REJECTED (qa) → stage sequence +
+ * Covers, in order: create order (order_taker) → submit → piece-by-piece repeat
+ * QA with one piece REJECTED, opened WITHOUT a cloth-acceptance step (the
+ * Inspector) → stage sequence +
  * job card (floor_manager) → NEEDLE LINES added one at a time, capped at 6,
  * renumbering on delete → CLIENT INFORMED (must confirm the card) → ASK FOR
  * MATERIAL → issue materials (store_manager) → accept inventory (floor_manager)
@@ -170,7 +171,12 @@ function bail(why) {
   }
 
   // ---------------------------------------------------------------------------
-  // 2. QA: cloth inspection, then piece-by-piece repeat QA
+  // 2. The Inspector: STRAIGHT into piece-by-piece repeat QA
+  //
+  // There is no cloth-acceptance gate in front of this any more (0092). The
+  // order is still at `awaiting_cloth_inspection` when the first piece decision
+  // arrives, and that decision is what opens it — asserted below, because the
+  // whole point of the change is that nobody presses anything first.
   //
   // The sheet carries THREE pieces and the last one is REJECTED, not passed.
   // That rejection is what section 7 later looks for on the order taker's
@@ -179,15 +185,37 @@ function bail(why) {
   // gets a repeat, let alone a handoff. Two pieces still pass, which is what
   // the rest of the walk needs.
   // ---------------------------------------------------------------------------
-  console.log('\n  2. QA — cloth inspection, piece-by-piece repeat QA, one REJECTION');
-  const accepted = await rpc('qa', 'qa_accept_cloth', { p_order_id: orderId });
-  chk(accepted.ok, `qa_accept_cloth → ${accepted.ok ? accepted.body?.status : accepted.msg}`);
+  console.log('\n  2. Inspector — straight into Start QA, piece by piece, one REJECTION');
+
+  const beforeQa = await get('qa', `orders?id=eq.${orderId}&select=status,inspected_at`);
+  chk(beforeQa.body?.[0]?.status === 'awaiting_cloth_inspection',
+    `the order is still unaccepted — nothing has been pressed (is ${beforeQa.body?.[0]?.status})`);
+  // Probed against a NIL id so it refuses during validation and writes nothing —
+  // calling it for real here would advance the very order the next assertion is
+  // about. It must still EXIST: 0092 removed its screen, not the capability.
+  //
+  // PGRST202 is "not in the schema cache" — dropped. A function that EXISTS and
+  // raises not-found answers 404 too, with PGRST116, so the STATUS cannot tell
+  // the two apart and the code has to.
+  const gate = await rpc('qa', 'qa_accept_cloth', { p_order_id: NIL });
+  chk(gate.body?.code !== 'PGRST202',
+    `  qa_accept_cloth is deliberately KEPT in the database — only its screen is gone (${gate.body?.code ?? gate.status})`);
 
   const sheets = await get('qa', `sheets?order_id=eq.${orderId}&select=id,repeats_count`);
+  let openedByFirstPass = false;
   for (const s of sheets.body ?? []) {
     for (let i = 0; i < s.repeats_count - 1; i++) {
       const p = await rpc('qa', 'qa_pass_piece', { p_order_id: orderId, p_sheet_id: s.id, p_photo_url: PHOTO });
       if (!p.ok) no(`qa_pass_piece: ${p.msg}`);
+      if (!openedByFirstPass) {
+        // The FIRST pass, fired against an unaccepted order, is what opens it.
+        const after = await get('qa', `orders?id=eq.${orderId}&select=status,inspected_at`);
+        chk(p.ok && after.body?.[0]?.status === 'awaiting_coding',
+          `the FIRST piece decision opened the order itself → ${after.body?.[0]?.status} (no accept-cloth press)`);
+        chk(after.body?.[0]?.inspected_at != null,
+          '  and stamped inspected_at, so the timeline and status board stay correct');
+        openedByFirstPass = true;
+      }
     }
     const rejected = await rpc('qa', 'qa_reject_piece', {
       p_order_id: orderId,
@@ -480,31 +508,62 @@ function bail(why) {
     const handed = await rpc('floor', 'fm_hand_over_stage', {
       p_repeat_id: rep.id, p_delivery_id: courier.id, p_partner_id: handler.id,
     });
-    chk(handed.ok && handed.body?.current_status === 'awaiting_dp_collection',
+    // 0092: the handover IS the collection. There is no awaiting_dp_collection.
+    chk(handed.ok && handed.body?.current_status === 'handed_over',
       `  "Handover to ${nextStage.stage_type}" (${courier.display_name} → ${handler.name}) → ${handed.ok ? handed.body.current_status : handed.msg}`);
     if (!handed.ok) break;
 
-    // ---- The delivery person's three legs, each with its photo ----
+    // ---- The delivery person's cycle: Delivery → In Pickup → Delivery ----
     const queued = await rpc('delivery', 'dp_orders_queue');
     const mineRow = (queued.body ?? []).find((r) => r.repeat_id === rep.id);
-    chk(mineRow?.tab === 'collection', `  it lands in the delivery person's Collection tab (is ${mineRow?.tab})`);
+    chk(mineRow?.tab === 'delivery',
+      `  [1/4] it lands straight in the DELIVERY tab (is ${mineRow?.tab})`);
+    chk(mineRow?.destination_kind === 'partner',
+      `  and its destination is the partner (is ${mineRow?.destination_kind})`);
 
-    chk((await rpc('delivery', 'dp_collect_from_floor', { p_repeat_id: rep.id, p_photo_url: PHOTO })).ok,
-      '  DP collects from the floor (photo)');
+    // The photo is required by the database on every leg, not just by a button.
+    const outNoPhoto = await rpc('delivery', 'dp_handover_to_partner', { p_repeat_id: rep.id, p_photo_url: '' });
+    chk(!outNoPhoto.ok && /photo/i.test(outNoPhoto.msg),
+      `  delivering WITHOUT a photo is refused: "${outNoPhoto.msg.slice(0, 40)}"`);
+
     const out = await rpc('delivery', 'dp_handover_to_partner', { p_repeat_id: rep.id, p_photo_url: PHOTO });
     chk(out.ok && out.body?.current_status === 'handed_off',
-      `  DP hands it to ${handler.name} (photo) → ${out.ok ? out.body.current_status : out.msg}`);
-    chk((await rpc('delivery', 'dp_collect_from_partner', { p_repeat_id: rep.id, p_photo_url: PHOTO })).ok,
-      '  DP collects it back from the partner (photo)');
-    chk((await rpc('delivery', 'dp_hand_back_to_floor', { p_repeat_id: rep.id })).ok,
-      '  DP returns it to the Floor Manager');
+      `  DP delivers it to ${handler.name} (photo) → ${out.ok ? out.body.current_status : out.msg}`);
 
-    // ---- and what comes back is inspected before it advances ----
-    const collected = await rpc('floor', 'fm_confirm_collection', { p_repeat_id: rep.id });
-    chk(collected.ok && collected.body?.current_status === 'stage_qa',
-      `  FM confirms collection → ${collected.ok ? collected.body.current_status : collected.msg} on ${nextStage.stage_type}, NOT in_progress`);
-    chk(collected.body?.current_stage_index === st.sequence + 1,
-      `  and the repeat is on stage ${collected.body?.current_stage_index}`);
+    // In Pickup, with NO partner-side button pressed. This is the assertion the
+    // brief turns on: the partner never touches the app, and the piece is
+    // collectable anyway.
+    const atPartner = await rpc('delivery', 'dp_orders_queue');
+    const pickRow = (atPartner.body ?? []).find((r) => r.repeat_id === rep.id);
+    chk(pickRow?.tab === 'pickup',
+      `  [2-3/4] it is in the PICKUP tab with NOTHING pressed by the partner (is ${pickRow?.tab})`);
+    chk(pickRow?.partner_ready_at == null,
+      '  and no partner-ready flag was set — the tab does not wait for one');
+
+    const backNoPhoto = await rpc('delivery', 'dp_collect_from_partner', { p_repeat_id: rep.id, p_photo_url: '' });
+    chk(!backNoPhoto.ok && /photo/i.test(backNoPhoto.msg),
+      `  collecting WITHOUT a photo is refused: "${backNoPhoto.msg.slice(0, 40)}"`);
+
+    const back = await rpc('delivery', 'dp_collect_from_partner', { p_repeat_id: rep.id, p_photo_url: PHOTO });
+    chk(back.ok && back.body?.current_status === 'returned_to_delivery',
+      `  DP collects it back (photo) → ${back.ok ? back.body.current_status : back.msg}`);
+
+    const returning = await rpc('delivery', 'dp_orders_queue');
+    const qaRow = (returning.body ?? []).find((r) => r.repeat_id === rep.id);
+    chk(qaRow?.tab === 'delivery' && qaRow?.destination_kind === 'qa',
+      `  [4/4] back in the DELIVERY tab, this time bound for the Inspector (${qaRow?.tab}/${qaRow?.destination_kind})`);
+
+    // ---- and the drop-off at the Inspector is what advances the stage ----
+    const toInspector = await rpc('delivery', 'dp_deliver_to_qa', { p_repeat_id: rep.id, p_photo_url: PHOTO });
+    chk(toInspector.ok && toInspector.body?.current_status === 'stage_qa',
+      `  DP delivers to the Inspector → ${toInspector.ok ? toInspector.body.current_status : toInspector.msg} on ${nextStage.stage_type}, with NO floor-manager confirmation in between`);
+    chk(toInspector.body?.current_stage_index === st.sequence + 1,
+      `  and the repeat is on stage ${toInspector.body?.current_stage_index}`);
+
+    const finished = await rpc('delivery', 'dp_orders_queue');
+    const doneRow = (finished.body ?? []).find((r) => r.repeat_id === rep.id);
+    chk(doneRow?.tab === 'completion',
+      `  it now reads as COMPLETION for the delivery person (is ${doneRow?.tab})`);
   }
 
   // The whole journey is readable in one call — what Final QA now renders.
@@ -523,8 +582,27 @@ function bail(why) {
   }
 
   // Mirror boundary: QA must NOT hold the floor manager's actions.
-  const qaHands = await rpc('qa', 'fm_confirm_collection', { p_repeat_id: rep.id });
-  chk(qaHands.status === 403, `qa REFUSED fm_confirm_collection — the mirror boundary holds (${qaHands.status})`);
+  const qaHands = await rpc('qa', 'fm_hand_over_stage', {
+    p_repeat_id: rep.id, p_delivery_id: NIL, p_partner_id: NIL,
+  });
+  chk(qaHands.status === 403, `qa REFUSED fm_hand_over_stage — the mirror boundary holds (${qaHands.status})`);
+
+  // The two stops 0092 removed are GONE from the REST surface, not merely
+  // unused. Left callable, each would be a transition out of a state the app
+  // can no longer enter.
+  for (const [fn, args] of [
+    ['dp_collect_from_floor', { p_repeat_id: rep.id, p_photo_url: PHOTO }],
+    ['dp_hand_back_to_floor', { p_repeat_id: rep.id }],
+    ['fm_confirm_collection', { p_repeat_id: rep.id }],
+    ['fm_pending_collections', { p_order_id: orderId }],
+  ]) {
+    const g = await rpc('floor', fn, args);
+    // PGRST202 is "not in the schema cache" — dropped. PostgREST also answers
+    // 404 with PGRST116 for a function that ran and raised not-found, so the
+    // status alone cannot tell the two apart.
+    chk(g.body?.code === 'PGRST202',
+      `  ${fn} is DROPPED, not merely unused (${g.body?.code ?? g.status})`);
+  }
 
   // ---------------------------------------------------------------------------
   // 7. The Initial-QA rejection reaches the order taker's Returns board (0054)

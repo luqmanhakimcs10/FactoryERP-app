@@ -84,7 +84,8 @@ function key(status, stageIndex) {
     case 'ready_for_production':   return `pre:${s}`;
     case 'in_progress':            return `in:${s}`;
     case 'stage_qa':               return `qa:${s}`;
-    case 'handover_for_delivery':  return `mgr:${s}`;
+    // 0092: no "with manager" key. A cleared stage reads as queued for the next.
+    case 'handover_for_delivery':  return `handover:${s + 1}`;
     case 'awaiting_dp_collection': return `handover:${s + 1}`;
     case 'handed_over':            return `handover:${s + 1}`;
     case 'handed_off':             return `in:${s + 1}`;
@@ -105,6 +106,8 @@ function label(k, stageNames) {
     case 'pre':       return `Awaiting ${name}`;
     case 'in':        return `In ${name}`;
     case 'qa':        return `Repeat Inspection after ${name}`;
+    // 0092 removed the `mgr` slot. Kept in this map only so an unexpected key
+    // renders as a sentence in the diff below rather than as a raw token.
     case 'mgr':       return `With Manager after ${name}`;
     case 'handover':  return `Handover to ${name} - In Delivery`;
     case 'pickup':    return `In Pickup from ${name}`;
@@ -320,12 +323,10 @@ await record('production started');
 const loop = [
   ['floor', 'fm_send_to_stage_qa', 'sent to stage QA'],
   ['qa', 'qa_pass_stage_qa', 'stage QA passed'],
-  ['floor', 'fm_hand_over_stage', 'handed over'],
-  ['delivery', 'dp_collect_from_floor', 'collected from floor'],
+  ['floor', 'fm_hand_over_stage', 'handed over — straight into the delivery tab'],
   ['delivery', 'dp_handover_to_partner', 'given to the partner'],
   ['delivery', 'dp_collect_from_partner', 'collected from partner'],
-  ['delivery', 'dp_hand_back_to_floor', 'handed back to floor'],
-  ['floor', 'fm_confirm_collection', 'collection confirmed'],
+  ['delivery', 'dp_deliver_to_qa', 'delivered to the Inspector — stage advances'],
   ['qa', 'qa_pass_stage_qa', 'stage QA passed (last stage)'],
 ];
 
@@ -334,8 +335,8 @@ const courier = (couriers.body ?? [])[0];
 
 for (const [who, fn, note] of loop) {
   let args = { p_repeat_id: subject.id };
-  if (fn === 'qa_pass_stage_qa' || fn === 'dp_collect_from_floor'
-      || fn === 'dp_handover_to_partner' || fn === 'dp_collect_from_partner') {
+  if (fn === 'qa_pass_stage_qa' || fn === 'dp_handover_to_partner'
+      || fn === 'dp_collect_from_partner' || fn === 'dp_deliver_to_qa') {
     args.p_photo_url = PHOTO;
   }
   if (fn === 'fm_hand_over_stage') {
@@ -360,15 +361,31 @@ else info(`fm_final_qa_pass: ${finalPass.msg}`);
 // ---------------------------------------------------------------------------
 // 3. The observed sequence must be exactly the brief's
 // ---------------------------------------------------------------------------
+/*
+ * The sequence after 0092. Four rows shorter than it was, and every one of the
+ * four is a stop that has been removed rather than renamed:
+ *
+ *   'With Manager after Embroidery'      handover_for_delivery folds into the
+ *                                        handover row — QA passing IS what
+ *                                        surfaces the piece to the FM, so it
+ *                                        reads as queued for the next stage
+ *   the SECOND 'In Pickup from Clipping' awaiting_fm_collection is gone; the
+ *                                        delivery person's drop-off at the
+ *                                        Inspector advances the stage itself
+ *
+ * 'Handover to Clipping - In Delivery' still appears TWICE, and it is the same
+ * two rows as before under different statuses: once for handover_for_delivery
+ * (QA has passed it, the Floor Manager has the button) and once for
+ * handed_over (the delivery person is carrying it). One label, because from the
+ * floor's side both mean "cleared embroidery, not yet at the partner".
+ */
 const expected = [
   'Awaiting Embroidery',
   'In Embroidery',
   'Repeat Inspection after Embroidery',
-  'With Manager after Embroidery',
   'Handover to Clipping - In Delivery',
   'Handover to Clipping - In Delivery',
   'In Clipping',
-  'In Pickup from Clipping',
   'In Pickup from Clipping',
   'Repeat Inspection after Clipping',
   'Final Inspection by Manager',
@@ -399,7 +416,7 @@ if (board.status === 404) {
   for (const want of [
     'Order Creation', 'Order Inspection', 'Job Card Creation', 'Job Card Approved',
     'Raw Materials Collection', 'Machine Assignment',
-    'In Embroidery', 'Repeat Inspection after Embroidery', 'With Manager after Embroidery',
+    'In Embroidery', 'Repeat Inspection after Embroidery',
     'Handover to Clipping - In Delivery', 'In Clipping', 'In Pickup after Clipping',
     'Repeat Inspection after Clipping',
     'Floor Inspection by Manager', 'Ready', 'Client Delivery', 'Completed',
@@ -410,9 +427,19 @@ if (board.status === 404) {
     !labels.some((l) => /Piko|Press/i.test(l)),
     'the order board omits the stages this order never had'
   );
+  // 0092: there is no "With Manager" row after ANY stage, not just the last.
+  // QA passing surfaces the piece back to the Floor Manager directly, so there
+  // is no waiting state left for such a row to describe.
   chk(
-    !labels.includes('With Manager after Clipping'),
-    'no "With Manager" row after the LAST stage'
+    !labels.some((l) => /With Manager/i.test(l)),
+    'no "With Manager after ..." row anywhere on the board'
+  );
+  // Embroidery is in-house, so it has no transit rows in front of it — the
+  // delivery person has no part in the first stage at all.
+  chk(
+    !labels.includes('Handover to Embroidery - In Delivery') &&
+      !labels.includes('In Pickup after Embroidery'),
+    'stage 1 has no handover or pickup row — embroidery never leaves the building'
   );
 
   const total = rows

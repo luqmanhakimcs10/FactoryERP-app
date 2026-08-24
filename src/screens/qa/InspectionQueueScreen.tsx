@@ -1,11 +1,12 @@
 /**
- * QA Inspection Queue — QA's single entry point into the inspection/coding flow.
+ * Inspection Queue — the Inspector's single entry point into the flow.
  *
- * ONE LIST, ONE DESTINATION. It used to carry two counters (awaiting
- * inspection / awaiting coding) and route each row to a different screen based
- * on which of the two statuses the order was in. Both buckets are now steps
- * inside `OrderQa`, so the split served no purpose except to make QA decide
- * where they were going before they got there.
+ * ONE LIST, ONE DESTINATION, AND NOW ONE ACTION. It used to carry two counters
+ * (awaiting inspection / awaiting coding) and route each row to a different
+ * screen; 0087 made both buckets steps inside `OrderQa`. 0092 removes the
+ * remaining difference between them — tapping any row goes straight into Start
+ * QA, whichever of the two statuses the order is in, because there is no longer
+ * a cloth-acceptance step to do first.
  *
  * Queue counts are per-factory by RLS, so a badge can never include another
  * tenant's work.
@@ -36,7 +37,11 @@ import {
   fontFamily,
 } from '../../constants/theme';
 
-/** Both steps QA owns, in one list — the flow behind them is one screen. */
+/**
+ * "Nobody has looked yet" and "inspection under way". Two statuses, one job:
+ * the first piece decision moves an order from the first to the second without
+ * anyone pressing anything (see `qa_open_inspection`, 0092).
+ */
 const QA_STATUSES = ['awaiting_cloth_inspection', 'awaiting_coding'];
 
 export function InspectionQueueScreen() {
@@ -53,8 +58,8 @@ export function InspectionQueueScreen() {
     <Screen padded={false}>
       <Text style={styles.lede}>
         {rows.length === 0
-          ? 'Nothing waiting on QA.'
-          : `${rows.length} order${rows.length === 1 ? '' : 's'} waiting on you. Each one opens the same flow: check the cloth, then inspect every piece.`}
+          ? 'Nothing waiting on you.'
+          : `${rows.length} order${rows.length === 1 ? '' : 's'} waiting on you. Each one opens straight into Start QA — pass or reject every piece.`}
       </Text>
 
       {isLoading ? (
@@ -73,7 +78,7 @@ export function InspectionQueueScreen() {
           ListEmptyComponent={
             <View style={styles.center}>
               <Text style={styles.emptyTitle}>Queue is clear</Text>
-              <Text style={styles.emptyBody}>No orders are waiting on QA.</Text>
+              <Text style={styles.emptyBody}>No orders are waiting on you.</Text>
             </View>
           }
           renderItem={({ item }) => (
@@ -91,9 +96,9 @@ export function InspectionQueueScreen() {
 }
 
 function QueueRow({ order, onPress }: { order: OrderListRow; onPress: () => void }) {
-  // Names the step this order is ON, not a separate place to go — both open
-  // the same screen.
-  const action = order.status === 'awaiting_cloth_inspection' ? 'Start QA — cloth first' : 'Start QA';
+  // One label for both statuses. Splitting it named a difference the Inspector
+  // no longer has to act on.
+  const action = 'Start QA';
   return (
     <Pressable
       onPress={onPress}

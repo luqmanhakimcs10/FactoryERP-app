@@ -20,7 +20,6 @@ export interface QueueRoute {
 export const QUEUE_SCREEN_TITLE: Record<string, string> = {
   awaiting_job_card: 'Need a job card',
   accept_inventory: 'Material to accept',
-  fm_collect: 'Waiting to be collected',
   fm_handover: 'Ready to hand over',
   fm_final_qa: 'Need final QA',
   fm_shift_close: 'Shifts still open',
@@ -32,10 +31,8 @@ export const QUEUE_SCREEN_TITLE: Record<string, string> = {
   sm_audit_today: 'Daily audit',
   qa_inspection: 'Need inspection',
   qa_stage: 'Need stage QA',
-  dp_collect: 'Ready to collect',
-  dp_send: 'Ready to send out',
-  dp_pickup: 'Finished at the partner',
-  dp_handback: 'To hand back',
+  dp_deliver: 'Ready to drop off',
+  dp_pickup: 'Out at a finishing partner',
   dp_final_delivery: 'Ready for final delivery',
   partner_active: 'With you now',
   ot_returns: 'Returns to complete',
@@ -69,9 +66,10 @@ export function routeForItem(queueKey: string, item: QueueItem): QueueRoute | nu
       // so the deep link opens that tab rather than a per-item screen.
       return { screen: 'OrdersBox', params: { tab: 'accept_inventory' } };
 
-    case 'fm_collect':
+    // `fm_collect` was here alongside this. Nothing can reach
+    // `awaiting_fm_collection` any more (0092), so the queue is gone and with
+    // it the "Collect [stage]" button this route pointed at.
     case 'fm_handover':
-      // Both actions live on the stage-tracking table for the order.
       return { screen: 'StageTracking', params: { orderId: item.order_id } };
 
     case 'fm_final_qa':
@@ -119,8 +117,8 @@ export function routeForItem(queueKey: string, item: QueueItem): QueueRoute | nu
 
     // ---- QA ----
     case 'qa_inspection':
-      // One destination whatever step the order is on: cloth inspection and
-      // repeat coding are steps INSIDE OrderQa now, not separate screens.
+      // One destination whatever status the order is on. There is no cloth step
+      // in front of it any more (0092) — this opens straight into Start QA.
       return { screen: 'OrderQa', params: { orderId: item.order_id } };
 
     case 'qa_stage':
@@ -130,12 +128,10 @@ export function routeForItem(queueKey: string, item: QueueItem): QueueRoute | nu
     // the queue key no longer exists — `fm_final_qa` covers those pieces.
 
     // ---- Delivery ----
-    // Every leg is actioned inline on the row itself, in whichever of the three
-    // tabs holds it (0084), so there is no per-item screen to open.
-    case 'dp_collect':
-    case 'dp_send':
+    // Every leg is actioned inline on the row itself, in whichever of the two
+    // tabs holds it (0092), so there is no per-item screen to open.
+    case 'dp_deliver':
     case 'dp_pickup':
-    case 'dp_handback':
     // "Ready for final delivery" is a section at the foot of that same list,
     // with the deliver action on each row.
     case 'dp_final_delivery':
@@ -178,15 +174,12 @@ export function routeForItem(queueKey: string, item: QueueItem): QueueRoute | nu
  */
 export function routeForBanner(queueKey: string): QueueRoute {
   switch (queueKey) {
-    // Each delivery queue is one of the three tabs (0084), so the banner opens
+    // Each delivery queue IS one of the two tabs (0092), so the banner opens
     // the tab that actually holds its rows rather than dropping the user on
     // whichever tab happens to be selected.
-    case 'dp_collect':
-      return { screen: 'RoleHome', params: { tab: 'collection' } };
-    case 'dp_send':
+    case 'dp_deliver':
       return { screen: 'RoleHome', params: { tab: 'delivery' } };
     case 'dp_pickup':
-    case 'dp_handback':
       return { screen: 'RoleHome', params: { tab: 'pickup' } };
     // The final client delivery is a section at the foot of the Delivery tab.
     case 'dp_final_delivery':

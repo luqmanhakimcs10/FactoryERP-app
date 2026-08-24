@@ -2,7 +2,7 @@
  * Floor Manager: Job Card detail — Client informed → Material (Stage 3, tail end).
  *
  * The design details, stage sequence, and needle/colour mapping are all set
- * upstream now, on JobCardBuilderScreen and JobCardReviewScreen — this screen
+ * upstream now, all on JobCardBuilderScreen (0092) — this screen
  * only displays them read-only and drives what comes after: download/share,
  * "Client informed", and "Ask for material". "Regenerate job card" stays as
  * an escape hatch for when the underlying sheets change after the initial

@@ -19,7 +19,6 @@ import { StatCard, StatGrid } from '../../components/ui/StatGrid';
 import { AppButton } from '../../components/ui/AppButton';
 import { ListRow } from '../../components/lists/ListRow';
 import { OrderStatusPill } from '../../components/ui/StatusPill';
-import { CollectPrompt } from '../../components/ui/CollectPrompt';
 import { PhotoPicker, type LocalPhoto } from '../../components/camera/PhotoPicker';
 import { listOrders, countOrders, startProduction } from '../../api/endpoints/orders';
 import {
@@ -142,10 +141,11 @@ export function OrdersBoxScreen() {
                   />
                 </StatGrid>
               </View>
-              {/* Pieces handed back by the delivery person, across every order. */}
-              <View style={styles.promptWrap}>
-                <CollectPrompt />
-              </View>
+              {/* The "Collect [stage]" prompt stood here — pieces the delivery
+                  person had handed back, waiting on a confirmation press. 0092
+                  removed the wait: a returning piece goes from the delivery
+                  person straight to the Inspector, so there is nothing for the
+                  Floor Manager to acknowledge on its way past. */}
               <Text style={styles.sectionTitle}>Active orders ({active?.length ?? 0})</Text>
               {activeLoading ? <ActivityIndicator color={colors.indigo} /> : null}
               {startError ? <Text style={styles.error}>{startError}</Text> : null}
@@ -660,7 +660,6 @@ const styles = StyleSheet.create({
   },
   machineActions: { flexDirection: 'row', gap: spacing.sm, marginTop: spacing.md },
   hint: { marginTop: spacing.sm, fontSize: fontSize.caption, color: colors.slate, lineHeight: 18 },
-  promptWrap: { paddingHorizontal: spacing.lg, paddingTop: spacing.lg },
   rowPressed: { opacity: 0.75 },
   rowTop: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: spacing.sm },
   code: { fontFamily: fontFamily.monoSemibold, fontSize: fontSize.body, color: colors.ink, fontWeight: fontWeight.semibold },

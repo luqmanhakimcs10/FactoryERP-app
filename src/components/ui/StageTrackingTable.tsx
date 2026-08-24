@@ -7,6 +7,15 @@
  * — a deliberate divergence from the shared Collection-QA gating elsewhere in
  * the app). "History" is available to both.
  *
+ * WHAT 0092 TOOK OUT OF HERE
+ * --------------------------
+ * "Collect [stage]". It was the Floor Manager confirming they were holding a
+ * piece that was already on their table, and it was the only exit from
+ * `awaiting_fm_collection` — a status nothing can reach any more. The delivery
+ * person hands the piece to the Inspector instead, and THAT drop-off advances
+ * the stage. So a returning piece now arrives on this table already at Stage
+ * QA, with Pass QA on it, rather than waiting for a press first.
+ *
  * TWO CHANGES FROM 0084 LIVE HERE
  * -------------------------------
  * 1. Pass QA requires a photo, the same way Initial QA and the final pass do.
@@ -35,11 +44,7 @@ import {
   passStageQa,
   markStageDamage,
 } from '../../api/endpoints/orders';
-import {
-  handOverStage,
-  confirmCollection,
-  listDeliveryPeople,
-} from '../../api/endpoints/stageHandover';
+import { handOverStage, listDeliveryPeople } from '../../api/endpoints/stageHandover';
 import { listLinkedOptions } from '../../api/endpoints/masters';
 import { uploadOrderPhoto } from '../../api/endpoints/storage';
 import { useAuth } from '../../auth/AuthContext';
@@ -100,21 +105,11 @@ export function StageTrackingTable({ orderId, factoryId, repeats, stages }: Prop
     queryClient.invalidateQueries({ queryKey: ['queueSummary'] });
   }
 
-  // "Start stage" is gone (0056): a stage opens on its own, both for the first
-  // stage (Start Production) and for every stage after it (the Floor Manager's
-  // collection confirmation, which since 0084 opens it at Stage QA because what
-  // came back is a finishing partner's work and it has not been looked at yet).
-  const collectMutation = useMutation({
-    mutationFn: (id: string) => confirmCollection(id),
-    onMutate: (id) => { setMutatingId(id); setError(null); },
-    onSuccess: () => {
-      invalidate();
-      queryClient.invalidateQueries({ queryKey: ['pendingCollections', orderId] });
-      queryClient.invalidateQueries({ queryKey: ['pendingCollections'] });
-    },
-    onError: (e) => setError(describeDbError(e, 'Collect')),
-    onSettled: () => setMutatingId(null),
-  });
+  // "Start stage" is gone (0056) and so is "Collect" (0092): a stage opens on
+  // its own, both for the first stage (Start Production) and for every stage
+  // after it. The later ones now open when the DELIVERY PERSON drops the piece
+  // at the Inspector — the Floor Manager confirming receipt of something
+  // already on their table was a press that recorded nothing new.
   const sendQaMutation = useMutation({
     mutationFn: (id: string) => sendToStageQa(id),
     onMutate: (id) => { setMutatingId(id); setError(null); },
@@ -170,16 +165,6 @@ export function StageTrackingTable({ orderId, factoryId, repeats, stages }: Prop
                         setError(null);
                         setHandoverFor(r);
                       }}
-                      style={styles.actionBtn}
-                    />
-                  ) : null}
-                  {isFloorManager && r.current_status === 'awaiting_fm_collection' ? (
-                    <AppButton
-                      title={`Collect ${stageName ?? 'stage'}`}
-                      variant="brass"
-                      loading={busy && collectMutation.isPending}
-                      disabled={busy && !collectMutation.isPending}
-                      onPress={() => collectMutation.mutate(r.id)}
                       style={styles.actionBtn}
                     />
                   ) : null}

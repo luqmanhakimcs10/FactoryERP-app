@@ -29,7 +29,6 @@ import { LeaveBoxScreen } from '../../screens/floorManager/LeaveBoxScreen';
 import { DamagesBoxScreen } from '../../screens/floorManager/DamagesBoxScreen';
 import { JobCardScreen } from '../../screens/floorManager/JobCardScreen';
 import { JobCardBuilderScreen } from '../../screens/floorManager/JobCardBuilderScreen';
-import { JobCardReviewScreen } from '../../screens/floorManager/JobCardReviewScreen';
 import { StageTrackingScreen } from '../../screens/floorManager/StageTrackingScreen';
 import { FmOrderDetailScreen } from '../../screens/floorManager/FmOrderDetailScreen';
 import { PoQueueScreen } from '../../screens/procurement/PoQueueScreen';
@@ -337,12 +336,7 @@ export function createRoleNavigator(role: Role) {
             <Stack.Screen
               name="JobCardBuilder"
               component={JobCardBuilderScreen}
-              options={{ title: 'Job card builder' }}
-            />
-            <Stack.Screen
-              name="JobCardReview"
-              component={JobCardReviewScreen}
-              options={{ title: 'Review job card' }}
+              options={{ title: 'Job card' }}
             />
             <Stack.Screen name="JobCard" component={JobCardScreen} options={{ title: 'Job card' }} />
             <Stack.Screen

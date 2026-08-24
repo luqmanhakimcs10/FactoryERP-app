@@ -99,7 +99,7 @@ const AUDIT = {
   Delivery: {
     email: 'delivery@alpha.test',
     counts: async (t) => [
-      ['Header "N items to move"', n(await rpc('dp_orders_queue', t)), 'dp_collect+dp_send+dp_pickup+dp_handback'],
+      ['Header "N items to move"', n(await rpc('dp_orders_queue', t)), 'dp_deliver+dp_pickup'],
       ['Section "Ready for final delivery"', n(await rpc('dp_final_delivery_queue', t)), 'dp_final_delivery'],
     ],
   },

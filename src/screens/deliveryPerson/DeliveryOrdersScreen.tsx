@@ -1,33 +1,53 @@
 /**
- * Delivery Person — THREE tabs: Collection, Delivery, Pickup. (0084, Fix 5)
+ * Delivery Person — TWO action tabs: Delivery and Pickup. (0092)
  *
  * WHAT THIS REPLACES
- * A single "Orders" list holding all four legs at once, with the action derived
- * from each row's status. That was an improvement on the Handoff/Return/SLA
- * split it replaced, but it flattened a round trip into a heap: a piece being
- * carried out and a piece being fetched back look identical in it, and the one
- * question this role actually asks — "what am I picking up right now?" — had no
- * answer short of reading every pill.
+ * ------------------
+ * Collection / Delivery / Pickup, which was three tabs for a round trip with
+ * two halves. The Collection tab existed because the Floor Manager's handover
+ * and the delivery person's collection were two separate presses recording one
+ * moment — two people standing next to each other, each confirming the same
+ * transfer. The same duplication sat at the other end of the trip, where the
+ * piece was "handed back" and then "collected" by the floor.
  *
- * The three tabs are the three physical journeys, in order:
+ * Both are gone. The Floor Manager's handover puts the piece straight into this
+ * screen's Delivery tab, and the drop-off at the Inspector is what advances the
+ * stage. What is left is the two things this role actually does.
  *
- *   Collection  Pieces the Floor Manager handed to ME. Collect (photo) — the
- *               piece is now in my hands.
- *   Delivery    Pieces I am carrying out to a finishing partner. Handover
- *               (photo) — custody passes to them and the SLA clock starts.
- *   Pickup      The return leg. Collect back from the partner (photo), then
- *               return it to the Floor Manager, who puts it through Stage QA.
+ * THE FOUR STATUSES, AND WHY TWO TABS HOLD THEM
+ * ---------------------------------------------
+ *   1. Delivery    handed_over          -> take it to the finishing partner
+ *   2. In Pickup   handed_off           at the partner. Nothing to do.
+ *   3. Pickup      handed_off           -> collect it back
+ *   4. Delivery    returned_to_delivery -> take it to the Inspector
+ *      Completion  stage_qa             done. Read-only.
+ *
+ * 2 and 3 are the SAME database row seen twice, which is the whole shape of
+ * this screen: "In Pickup" is what the piece IS, and the Pickup tab is where
+ * you go to do something about it. There is no third state in between, because
+ * THE PARTNER PRESSES NOTHING — they do the physical work and hand the piece
+ * back when the delivery person turns up. Waiting for a partner-side button
+ * before showing the row would be waiting for something nobody sends.
+ *
+ * 1 and 4 are the same ACTION — drop something off, with a photo — in opposite
+ * directions, which is why one tab holds both. `destination_kind` on the row
+ * says where, so the button can name it.
  *
  * WHICH TAB A ROW SITS IN IS DECIDED IN SQL, not here — `dp_orders_queue`
  * returns it. Which tab a status belongs to is part of the workflow definition,
  * and a client that works it out for itself can file a piece under a tab whose
  * action the database will then refuse.
  *
- * THE PARTNER IS NO LONGER CHOSEN HERE. The Floor Manager names both the
- * delivery person and the finishing partner when they hand over (Fix 4), so the
- * Delivery tab shows the destination rather than asking for it. The one
- * exception is a piece handed over by a pre-0084 client, which carries no
- * partner; those — and only those — still get a picker.
+ * EMBROIDERY IS NEVER HERE. It runs in-house on the factory's own machines, so
+ * the first time this role is involved at all is the handover that FOLLOWS it.
+ * Nothing filters it out: an in-house stage never reaches a status this queue
+ * selects, which is a stronger guarantee than a filter would be.
+ *
+ * THE PARTNER IS NOT CHOSEN HERE. The Floor Manager names both the delivery
+ * person and the finishing partner when they hand over (0084), so the Delivery
+ * tab shows the destination rather than asking for it. The one exception is a
+ * piece handed over by a pre-0084 client, which carries no partner; those — and
+ * only those — still get a picker.
  *
  * SLA-breached rows sort to the top of whichever tab they are in and carry an
  * alert pill.
@@ -54,10 +74,10 @@ import { useAuth } from '../../auth/AuthContext';
 import { describeDbError } from '../../utils/errors';
 import {
   listDeliveryOrders,
-  collectFromFloor,
   handoverToPartner,
   collectFromPartner,
-  handBackToFloor,
+  deliverToQa,
+  DELIVERY_TABS,
   type DpOrderRow,
   type DeliveryTab,
 } from '../../api/endpoints/stageHandover';
@@ -79,21 +99,32 @@ function stageLabel(stage: string | null | undefined) {
   return words.charAt(0).toUpperCase() + words.slice(1);
 }
 
+/** "3 days", "6h" — how long a piece has been sitting where it is. */
+function elapsed(since: string | null | undefined): string | null {
+  if (!since) return null;
+  const ms = Date.now() - new Date(since).getTime();
+  if (!Number.isFinite(ms) || ms < 0) return null;
+  const hours = Math.floor(ms / 3_600_000);
+  if (hours < 1) return 'under an hour';
+  if (hours < 48) return `${hours}h`;
+  return `${Math.floor(hours / 24)} days`;
+}
+
 const TAB_COPY: Record<DeliveryTab, { title: string; blurb: string; empty: string }> = {
-  collection: {
-    title: 'Collection',
-    blurb: 'Handed to you by the Floor Manager. Photograph each piece as you take it.',
-    empty: 'Pieces appear here the moment a Floor Manager hands one to you.',
-  },
   delivery: {
     title: 'Delivery',
-    blurb: 'In your hands, on the way to a finishing partner.',
-    empty: 'Anything you collect from the floor lands here, ready to go out.',
+    blurb: 'In your hands, waiting to be dropped off — at a partner or at the Inspector.',
+    empty: 'A piece lands here the moment the Floor Manager hands one to you.',
   },
   pickup: {
     title: 'Pickup',
-    blurb: 'Out at a partner, or collected back and due at the floor.',
-    empty: 'Pieces appear here once they are with a partner and on their way back.',
+    blurb: 'Out at a finishing partner. Collect each one back when their work is done.',
+    empty: 'Pieces appear here once you have delivered them to a partner.',
+  },
+  completion: {
+    title: 'Completion',
+    blurb: 'Delivered to the Inspector. Your part of this stage is finished.',
+    empty: 'Nothing delivered to the Inspector yet.',
   },
 };
 
@@ -103,9 +134,7 @@ export function DeliveryOrdersScreen({ navigation, route }: any) {
   // way the Floor Manager's accept-inventory banner opens its tab. This
   // initialiser covers the cold case — the screen mounting with a tab already
   // named on the route...
-  const [tab, setTab] = useState<DeliveryTab>(
-    (route?.params?.tab as DeliveryTab) ?? 'collection'
-  );
+  const [tab, setTab] = useState<DeliveryTab>((route?.params?.tab as DeliveryTab) ?? 'delivery');
   const [openId, setOpenId] = useState<string | null>(null);
 
   // ...but the initialiser alone is why the banner was a dead click.
@@ -137,9 +166,9 @@ export function DeliveryOrdersScreen({ navigation, route }: any) {
     queryFn: listDeliveryOrders,
   });
 
-  // The final handover to the CLIENT. It is not one of the three stage-loop
-  // journeys, so it is not a tab; it sits under Delivery, which is the tab whose
-  // meaning it shares — a piece leaving this building for somewhere else.
+  // The final handover to the CLIENT. It is not one of the stage-loop journeys,
+  // so it is not a tab; it sits under Delivery, which is the tab whose meaning
+  // it shares — a piece leaving this building for somewhere else.
   const { data: finalDeliveries } = useQuery({
     queryKey: ['dpFinalDelivery'],
     queryFn: listFinalDeliveryQueue,
@@ -160,15 +189,20 @@ export function DeliveryOrdersScreen({ navigation, route }: any) {
 
   const all = (data ?? []).filter(matches);
   const counts: Record<DeliveryTab, number> = {
-    collection: all.filter((r) => r.tab === 'collection').length,
     delivery: all.filter((r) => r.tab === 'delivery').length,
     pickup: all.filter((r) => r.tab === 'pickup').length,
+    completion: all.filter((r) => r.tab === 'completion').length,
   };
   const rows = all.filter((r) => r.tab === tab);
   /*
-   * The metrics grid IS `counts` — the same three numbers the tab labels carry.
-   * Deliberately not a second read: two sources for "how many am I collecting"
+   * The metrics grid IS `counts` — the same numbers the tab labels carry.
+   * Deliberately not a second read: two sources for "how many am I delivering"
    * is two numbers that can disagree on the same screen.
+   *
+   * There are THREE cards and TWO tabs, on purpose. Completion is a status, not
+   * a tab — there is nothing to do on those rows — but it is the last leg of
+   * this role's job and it should be countable. Tapping it opens the read-only
+   * list rather than a fourth place to press something.
    */
   const breached = rows.filter((r) => r.sla_breached).length;
   const showFinal = tab === 'delivery' && (finalDeliveries?.length ?? 0) > 0;
@@ -186,17 +220,10 @@ export function DeliveryOrdersScreen({ navigation, route }: any) {
         <MetricsSection subtitle="What is in your hands right now">
           <MetricRow>
             <MetricCard
-              label="In Collection"
-              value={statCount(isLoading ? undefined : counts.collection)}
-              icon="download-outline"
-              accent={counts.collection ? 'amber' : 'teal'}
-              onPress={() => setTab('collection')}
-            />
-            <MetricCard
               label="In Delivery"
               value={statCount(isLoading ? undefined : counts.delivery)}
               icon="bicycle-outline"
-              accent={counts.delivery ? 'green' : 'teal'}
+              accent={counts.delivery ? 'amber' : 'teal'}
               onPress={() => setTab('delivery')}
             />
             <MetricCard
@@ -206,18 +233,28 @@ export function DeliveryOrdersScreen({ navigation, route }: any) {
               accent={counts.pickup ? 'rose' : 'teal'}
               onPress={() => setTab('pickup')}
             />
+            <MetricCard
+              label="Completion"
+              value={statCount(isLoading ? undefined : counts.completion)}
+              icon="checkmark-done-outline"
+              accent={counts.completion ? 'green' : 'teal'}
+              onPress={() => setTab('completion')}
+            />
           </MetricRow>
         </MetricsSection>
       </View>
 
       <View style={styles.tabsWrap}>
+        {/* `completion` matches no tab, so neither segment is highlighted while
+            the read-only list is open. Highlighting Delivery there would claim
+            the user is looking at something they are not. */}
         <SegmentedTabs
           value={tab}
           onChange={(k) => {
             setTab(k as DeliveryTab);
             setOpenId(null);
           }}
-          tabs={(['collection', 'delivery', 'pickup'] as DeliveryTab[]).map((k) => ({
+          tabs={DELIVERY_TABS.map((k) => ({
             key: k,
             label: `${TAB_COPY[k].title}${counts[k] ? ` (${counts[k]})` : ''}`,
           }))}
@@ -229,16 +266,29 @@ export function DeliveryOrdersScreen({ navigation, route }: any) {
           {TAB_COPY[tab].blurb}
           {breached > 0 ? ` · ${breached} past SLA` : ''}
         </Text>
+        {/* Completion has no tab of its own, so reaching it via the metric card
+            leaves both segments unselected. Say where you are rather than let
+            the header quietly contradict the control above it. */}
+        {tab === 'completion' ? (
+          <Pressable
+            accessibilityRole="button"
+            onPress={() => setTab('delivery')}
+            style={styles.backToTabs}
+          >
+            <Ionicons name="arrow-back" size={14} color={colors.primary} />
+            <Text style={styles.backToTabsText}>Back to Delivery</Text>
+          </Pressable>
+        ) : null}
         <View style={styles.stitch} />
       </View>
 
-      {/* The four stage-loop banners are exactly these three tabs, which are
-          right above with the same counts on them. Rendering both stacked five
-          banners over the list and pushed every row off the bottom of the
-          screen, so all three tabs showed the same thing and switching looked
-          broken. "Ready for final delivery" stays — it has no tab. */}
+      {/* The stage-loop banners are exactly these tabs, which are right above
+          with the same counts on them. Rendering both stacked banners over the
+          list and pushed every row off the bottom of the screen, so every tab
+          showed the same thing and switching looked broken. "Ready for final
+          delivery" stays — it has no tab. */}
       <View style={styles.banner}>
-        <TaskBanners hideQueues={['dp_collect', 'dp_send', 'dp_pickup', 'dp_handback']} />
+        <TaskBanners hideQueues={['dp_deliver', 'dp_pickup']} />
       </View>
 
       {isLoading ? (
@@ -294,7 +344,7 @@ export function DeliveryOrdersScreen({ navigation, route }: any) {
                         {d.vendor_name} · {d.completed_repeats}/{d.total_repeats} pieces
                       </Text>
                       <View style={styles.pills}>
-                        <StatusPill label="Ready for delivery" color={colors.success} />
+                        <StatusPill label="Ready for delivery" color={colors.progressDone} />
                       </View>
                     </View>
                     <Ionicons name="chevron-forward" size={18} color={colors.slate} />
@@ -324,11 +374,29 @@ function DeliveryCard({
   const [partnerId, setPartnerId] = useState<string | null>(row.partner_id);
   const [error, setError] = useState<string | null>(null);
 
-  // Every leg but the last one is a physical custody change, and every physical
-  // custody change in this app leaves a photo.
-  const needsPhoto = row.current_status !== 'returned_to_delivery';
+  // Completion rows are the record of a finished leg. Every OTHER row has
+  // exactly one action and it always takes a photo — that uniformity is the
+  // point of the two-tab shape.
+  const isCompletion = row.tab === 'completion';
+  /*
+   * WHICH STAGE THIS TRIP IS ABOUT.
+   *
+   * `current_stage_index` is the stage the piece has last CLEARED, and it does
+   * not advance until the piece reaches the Inspector — so through the whole
+   * out-and-back trip `stage_type` still reads "embroidery" while the work
+   * being done is clipping. `destination_stage` is the stage the trip is FOR,
+   * which is the one worth naming on every row except a completion row, where
+   * the index has already moved and `stage_type` is the partner's own stage.
+   *
+   * Getting this backwards is how a row ends up telling the delivery person to
+   * collect embroidery from a clipping partner.
+   */
+  const workStage = isCompletion ? row.stage_type : row.destination_stage ?? row.stage_type;
+  const workSequence = isCompletion ? row.stage_sequence : (row.stage_sequence ?? 0) + 1;
   // Only a piece handed over before 0084 arrives with no partner set.
   const needsPartnerPick = row.current_status === 'handed_over' && !row.partner_id;
+  /** Where this trip is going. From SQL — see `destination_kind`. */
+  const toQa = row.destination_kind === 'qa';
 
   const { data: partners, isLoading: partnersLoading } = useQuery({
     queryKey: ['finishingPartnerOptions', 'any'],
@@ -345,44 +413,38 @@ function DeliveryCard({
     // and boards have to learn about it too.
     queryClient.invalidateQueries({ queryKey: ['queueSummary'] });
     queryClient.invalidateQueries({ queryKey: ['partner', 'activeWork'] });
-    queryClient.invalidateQueries({ queryKey: ['pendingCollections'] });
   }
 
   const act = useMutation({
     mutationFn: async () => {
-      // Photo legs upload first: the RPC rejects an empty url, so a failed
-      // upload must surface as an upload error, not as a confusing DB refusal.
-      if (needsPhoto) {
-        const url = await uploadOrderPhoto(profile?.factory_id ?? '', row.order_id, photo[0].uri);
-        if (row.current_status === 'awaiting_dp_collection') return collectFromFloor(row.repeat_id, url);
-        if (row.current_status === 'handed_over') return handoverToPartner(row.repeat_id, url, partnerId);
-        return collectFromPartner(row.repeat_id, url);
-      }
-      return handBackToFloor(row.repeat_id);
+      // The upload runs first on every leg: each RPC rejects an empty url, so a
+      // failed upload must surface as an upload error rather than as a
+      // confusing database refusal about a photo the user did take.
+      const url = await uploadOrderPhoto(profile?.factory_id ?? '', row.order_id, photo[0].uri);
+      if (row.current_status === 'handed_over') return handoverToPartner(row.repeat_id, url, partnerId);
+      if (row.current_status === 'handed_off') return collectFromPartner(row.repeat_id, url);
+      return deliverToQa(row.repeat_id, url);
     },
     onSuccess: done,
     onError: (e) => setError(describeDbError(e, 'Delivery')),
   });
 
   const actionLabel =
-    row.current_status === 'awaiting_dp_collection'
-      ? 'Collect from Floor Manager'
-      : row.current_status === 'handed_over'
-        ? `Handover to ${row.partner_name ?? 'finishing partner'}`
-        : row.current_status === 'handed_off'
-          ? `Collect from ${row.partner_name ?? 'partner'}`
-          : 'Return to Floor Manager';
+    row.current_status === 'handed_over'
+      ? `Deliver to ${row.partner_name ?? 'finishing partner'}`
+      : row.current_status === 'handed_off'
+        ? `Collect from ${row.partner_name ?? 'partner'}`
+        : 'Deliver to the Inspector';
 
   const photoLabel =
-    row.current_status === 'awaiting_dp_collection'
-      ? 'Photo of the piece as collected from the Floor Manager'
-      : row.current_status === 'handed_over'
-        ? `Photo of the piece as handed to ${row.partner_name ?? 'the partner'}`
-        : `Photo of the piece as collected back from ${row.partner_name ?? 'the partner'}`;
+    row.current_status === 'handed_over'
+      ? `Photo of the piece as handed to ${row.partner_name ?? 'the partner'}`
+      : row.current_status === 'handed_off'
+        ? `Photo of the piece as collected back from ${row.partner_name ?? 'the partner'}`
+        : 'Photo of the piece as handed to the Inspector';
 
-  const canAct = needsPhoto
-    ? photo.length > 0 && (!needsPartnerPick || !!partnerId)
-    : true;
+  const canAct = photo.length > 0 && (!needsPartnerPick || !!partnerId);
+  const atPartnerFor = elapsed(row.handed_off_at);
 
   return (
     <View style={[styles.card, row.sla_breached && styles.cardBreached]}>
@@ -393,94 +455,100 @@ function DeliveryCard({
             {row.order_code} · {row.vendor_name}
           </Text>
           <Text style={styles.meta}>
-            Stage {row.stage_sequence ?? '—'} of {row.total_stages} · {stageLabel(row.stage_type)}
-            {row.destination_stage ? ` → ${stageLabel(row.destination_stage)}` : ''}
+            Stage {workSequence ?? '—'} of {row.total_stages} · {stageLabel(workStage)}
           </Text>
-          {row.partner_name ? (
-            <Text style={styles.meta}>Partner: {row.partner_name}</Text>
-          ) : null}
+          {row.partner_name ? <Text style={styles.meta}>Partner: {row.partner_name}</Text> : null}
           <View style={styles.pills}>
             <RepeatStatusPill status={row.current_status} perspective="delivery" />
             {row.sla_breached ? <StatusPill label="SLA breached" color={colors.alert} /> : null}
-            {/* The partner has said their work is done. Advisory, not a gate —
-                collection still works without it (see 0062). */}
-            {row.partner_ready_at ? (
-              <StatusPill label="Partner finished — ready" color={colors.success} />
+            {/* How long it has been out. The partner tells the app nothing —
+                they press no button at all — so time-at-partner and the SLA are
+                what the delivery person has to judge by, and they are on the
+                collapsed row rather than hidden behind a tap. */}
+            {row.current_status === 'handed_off' && atPartnerFor ? (
+              <StatusPill
+                label={`At partner ${atPartnerFor}`}
+                color={row.sla_breached ? colors.alert : colors.progressActive}
+              />
             ) : null}
           </View>
         </View>
         <View style={styles.chev}>
-          <Ionicons
-            name={expanded ? 'chevron-up' : 'chevron-down'}
-            size={18}
-            color={colors.slate}
-          />
+          <Ionicons name={expanded ? 'chevron-up' : 'chevron-down'} size={18} color={colors.slate} />
         </View>
       </Pressable>
 
       {expanded ? (
         <View style={styles.body}>
-          {needsPhoto ? (
-            <PhotoPicker
-              label={photoLabel}
-              hint="Required — this is the proof of physical custody."
-              photos={photo}
-              onChange={setPhoto}
-              multiple={false}
-              retakeLabel="Retake"
-            />
-          ) : null}
-
-          {needsPartnerPick ? (
+          {isCompletion ? (
+            <Text style={styles.note}>
+              Delivered to the Inspector. The {stageLabel(workStage).toLowerCase()} work is being
+              checked now — once it passes, the Floor Manager gets the next handover. There is
+              nothing for you to do on this piece.
+            </Text>
+          ) : (
             <>
-              <Text style={styles.note}>
-                This piece was handed over before the Floor Manager began naming the partner, so
-                there is no destination on it. Pick one to send it out.
-              </Text>
-              <SelectField
-                label="Finishing partner"
-                value={partnerId}
-                onChange={setPartnerId}
-                options={partners ?? []}
-                loading={partnersLoading}
-                required
-                emptyHint="No finishing partners on file yet — add one under Master data."
+              <PhotoPicker
+                label={photoLabel}
+                hint="Required — this is the proof of physical custody."
+                photos={photo}
+                onChange={setPhoto}
+                multiple={false}
+                retakeLabel="Retake"
+              />
+
+              {needsPartnerPick ? (
+                <>
+                  <Text style={styles.note}>
+                    This piece was handed over before the Floor Manager began naming the partner,
+                    so there is no destination on it. Pick one to send it out.
+                  </Text>
+                  <SelectField
+                    label="Finishing partner"
+                    value={partnerId}
+                    onChange={setPartnerId}
+                    options={partners ?? []}
+                    loading={partnersLoading}
+                    required
+                    emptyHint="No finishing partners on file yet — add one under Master data."
+                  />
+                </>
+              ) : null}
+
+              {toQa && row.current_status === 'returned_to_delivery' ? (
+                <Text style={styles.note}>
+                  This is the last leg of your job on this stage. Handing it to the Inspector puts
+                  the {stageLabel(workStage).toLowerCase()} work straight into Stage QA — the Floor
+                  Manager does not have to confirm anything first.
+                </Text>
+              ) : null}
+
+              {row.current_status === 'handed_off' ? (
+                <Text style={styles.note}>
+                  {atPartnerFor
+                    ? `With ${row.partner_name ?? 'the partner'} for ${atPartnerFor}.`
+                    : `With ${row.partner_name ?? 'the partner'}.`}
+                  {row.sla_hours ? ` SLA is ${row.sla_hours}h from handover.` : ''}
+                  {row.sla_breached ? ' This one is already past it.' : ''}
+                  {' Collect it whenever the work is actually done — the partner has nothing to '}
+                  {'press to release it.'}
+                </Text>
+              ) : null}
+
+              {error ? <Text style={styles.error}>{error}</Text> : null}
+
+              <AppButton
+                title={actionLabel}
+                variant="brass"
+                disabled={!canAct}
+                loading={act.isPending}
+                onPress={() => {
+                  setError(null);
+                  act.mutate();
+                }}
               />
             </>
-          ) : null}
-
-          {row.current_status === 'returned_to_delivery' ? (
-            <Text style={styles.note}>
-              Returning prompts the Floor Manager to confirm they have the piece. It then goes
-              through Stage QA for the {stageLabel(row.stage_type).toLowerCase()} work before it
-              moves on.
-            </Text>
-          ) : null}
-
-          {row.current_status === 'handed_off' && row.sla_hours ? (
-            <Text style={styles.note}>
-              SLA is {row.sla_hours}h from handover.
-              {row.sla_breached ? ' This one is already past it.' : ''}
-              {row.partner_ready_at
-                ? ` ${row.partner_name ?? 'The partner'} marked it finished on ${new Date(
-                    row.partner_ready_at
-                  ).toLocaleDateString()}.`
-                : ''}
-            </Text>
-          ) : null}
-
-          {error ? <Text style={styles.error}>{error}</Text> : null}
-
-          <AppButton
-            title={actionLabel}
-            variant="brass"
-            disabled={!canAct}
-            loading={act.isPending}
-            onPress={() => {
-              setError(null);
-              act.mutate();
-            }}
-          />
+          )}
         </View>
       ) : null}
     </View>
@@ -492,6 +560,18 @@ const styles = StyleSheet.create({
   tabsWrap: { paddingTop: spacing.md },
   head: { paddingHorizontal: spacing.lg, paddingTop: spacing.md },
   sub: { fontSize: fontSize.secondary, color: colors.slate, lineHeight: 20 },
+  backToTabs: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.xs,
+    marginTop: spacing.sm,
+    minHeight: 32,
+  },
+  backToTabsText: {
+    fontSize: fontSize.caption,
+    fontWeight: fontWeight.semibold,
+    color: colors.primary,
+  },
   // The stitch line: the app's running motif for "a seam between steps".
   stitch: {
     marginTop: spacing.md,
@@ -556,7 +636,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: spacing.md,
     padding: spacing.lg,
-    borderColor: colors.success,
+    borderColor: colors.progressDone,
   },
 });
 
